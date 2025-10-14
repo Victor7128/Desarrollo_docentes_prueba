@@ -81,12 +81,11 @@ class SectionDetailActivity : AppCompatActivity() {
             openSessionsActivity()
         }
 
-        // Botón de Reportes (para futuro)
+        // ✅ NUEVO: Botón de Reportes/Consolidado
         val cardReports = findViewById<MaterialCardView>(R.id.cardReports)
         cardReports.setOnClickListener {
             Log.d(TAG, "Click en botón Reportes")
-            Toast.makeText(this, "Reportes - Próximamente", Toast.LENGTH_SHORT).show()
-            // TODO: Implementar navegación a ReportesActivity
+            openReportsActivity()
         }
     }
 
@@ -117,6 +116,25 @@ class SectionDetailActivity : AppCompatActivity() {
         Log.d(TAG, "Abriendo SessionsActivity con:")
         Log.d(TAG, "  SECTION_ID: $sectionId")
         Log.d(TAG, "  SECTION_NAME: $gradeNumber° $sectionLetter - $bimesterName Bimestre")
+
+        startActivity(intent)
+    }
+
+    // ✅ NUEVA FUNCIÓN: Abrir ReportsActivity
+    private fun openReportsActivity() {
+        val sectionName = "$gradeNumber° $sectionLetter"
+
+        val intent = Intent(this, ReportsActivity::class.java).apply {
+            putExtra("SECTION_ID", sectionId)
+            putExtra("COMPETENCY_ID", -1) // Se puede omitir o usar -1 para mostrar todas
+            putExtra("SECTION_NAME", sectionName)
+            putExtra("BIMESTER_NAME", bimesterName)
+        }
+
+        Log.d(TAG, "Abriendo ReportsActivity con:")
+        Log.d(TAG, "  SECTION_ID: $sectionId")
+        Log.d(TAG, "  SECTION_NAME: $sectionName")
+        Log.d(TAG, "  BIMESTER_NAME: $bimesterName")
 
         startActivity(intent)
     }

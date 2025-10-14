@@ -14,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.docentes.adapters.StudentAdapter
@@ -28,6 +29,7 @@ import com.example.docentes.network.CreateStudentRequest
 import com.example.docentes.network.ImportStudentsResponse
 import com.example.docentes.network.RetrofitClient
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -35,13 +37,13 @@ import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import java.io.File
-import java.io.FileOutputStream
 
 class StudentsActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "StudentsActivity"
     }
+
     private lateinit var rvStudents: RecyclerView
     private lateinit var progressBar: ProgressBar
     private lateinit var tvEmptyState: TextView
@@ -111,20 +113,14 @@ class StudentsActivity : AppCompatActivity() {
 
     private fun checkPermissions() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+ (API 33+)
-            // Nota: READ_MEDIA_DOCUMENTS requiere que la app declare que usa documentos
-            // Para archivos TXT/CSV desde el selector, no necesitamos este permiso específico
-            // El sistema ya nos da acceso temporal al archivo seleccionado
             Log.d(TAG, "Android 13+: No se requiere permiso específico para archivos seleccionados")
-        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            // Android 6.0 a 12
+        } else
             when {
                 checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
                         android.content.pm.PackageManager.PERMISSION_GRANTED -> {
                     Log.d(TAG, "Permission already granted")
                 }
                 shouldShowRequestPermissionRationale(android.Manifest.permission.READ_EXTERNAL_STORAGE) -> {
-                    // Mostrar explicación si es necesario
                     Toast.makeText(
                         this,
                         "Se necesita permiso para leer archivos",
@@ -136,7 +132,6 @@ class StudentsActivity : AppCompatActivity() {
                     requestPermissionLauncher.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
                 }
             }
-        }
     }
 
     private fun setupUI() {
@@ -198,38 +193,27 @@ class StudentsActivity : AppCompatActivity() {
         }
     }
 
+    // ✅ ACTUALIZADO: Usar getStudents() con corrutinas
     private fun loadStudents() {
         progressBar.visibility = ProgressBar.VISIBLE
         tvEmptyState.visibility = TextView.GONE
 
-        RetrofitClient.instance.listStudents(sectionId)
-            .enqueue(object : Callback<List<Student>> {
-                override fun onResponse(
-                    call: Call<List<Student>>,
-                    response: Response<List<Student>>
-                ) {
-                    progressBar.visibility = ProgressBar.GONE
-                    if (response.isSuccessful) {
-                        val students = response.body() ?: emptyList()
-                        updateStudentsList(students)
-                    } else {
-                        Toast.makeText(
-                            this@StudentsActivity,
-                            "Error al cargar estudiantes",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
+        lifecycleScope.launch {
+            try {
+                val students = RetrofitClient.apiService.getStudents(sectionId)
+                updateStudentsList(students)
+                progressBar.visibility = ProgressBar.GONE
 
-                override fun onFailure(call: Call<List<Student>>, t: Throwable) {
-                    progressBar.visibility = ProgressBar.GONE
-                    Toast.makeText(
-                        this@StudentsActivity,
-                        "Error: ${t.message}",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            })
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading students", e)
+                progressBar.visibility = ProgressBar.GONE
+                Toast.makeText(
+                    this@StudentsActivity,
+                    "Error al cargar estudiantes: ${e.message}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     private fun updateStudentsList(students: List<Student>) {
@@ -260,6 +244,7 @@ class StudentsActivity : AppCompatActivity() {
         dialog.show(supportFragmentManager, "EditStudentDialog")
     }
 
+    // ✅ MANTENER: Estos usan Call<> porque son operaciones de modificación
     private fun createStudent(fullName: String) {
         progressBar.visibility = ProgressBar.VISIBLE
 
@@ -505,11 +490,9 @@ class StudentsActivity : AppCompatActivity() {
         Log.d(TAG, "Is CSV: $isCsv")
 
         try {
-            // Obtener información del archivo
             val fileName = getFileName(uri)
             Log.d(TAG, "File name: $fileName")
 
-            // Leer el contenido del archivo
             val inputStream = contentResolver.openInputStream(uri)
             if (inputStream == null) {
                 Log.e(TAG, "Input stream is null!")
@@ -517,7 +500,6 @@ class StudentsActivity : AppCompatActivity() {
                 return
             }
 
-            // Leer todo el contenido
             val content = inputStream.bufferedReader().use { it.readText() }
             inputStream.close()
 
@@ -529,7 +511,6 @@ class StudentsActivity : AppCompatActivity() {
                 return
             }
 
-            // Crear archivo temporal
             val extension = if (isCsv) "csv" else "txt"
             val tempFile = File(cacheDir, "import_${System.currentTimeMillis()}.$extension")
             tempFile.writeText(content)
@@ -537,7 +518,6 @@ class StudentsActivity : AppCompatActivity() {
             Log.d(TAG, "Temp file created: ${tempFile.absolutePath}")
             Log.d(TAG, "Temp file size: ${tempFile.length()} bytes")
 
-            // Subir según el tipo
             if (isCsv) {
                 uploadCsvFile(tempFile)
             } else {
@@ -553,7 +533,6 @@ class StudentsActivity : AppCompatActivity() {
         }
     }
 
-    // Función auxiliar para obtener el nombre del archivo
     private fun getFileName(uri: Uri): String? {
         var fileName: String? = null
         val cursor = contentResolver.query(uri, null, null, null, null)
@@ -668,6 +647,7 @@ class StudentsActivity : AppCompatActivity() {
                 }
             })
     }
+
     private fun showImportResult(result: ImportStudentsResponse?) {
         Log.d(TAG, "=== IMPORT RESULT ===")
         Log.d(TAG, "Result is null: ${result == null}")

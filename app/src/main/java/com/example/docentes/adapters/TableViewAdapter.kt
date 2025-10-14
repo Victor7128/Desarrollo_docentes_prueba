@@ -132,12 +132,11 @@ class TableViewAdapter(
     override fun onCreateCornerView(parent: ViewGroup): View {
         val view = TextView(context).apply {
             text = "ESTUDIANTES"
-            // ✅ MISMO ANCHO que setRowHeaderWidth(450)
-            layoutParams = ViewGroup.LayoutParams(450, 70)
+            layoutParams = ViewGroup.LayoutParams(450, 80) // ✅ Altura aumentada a 80
             setBackgroundColor("#E8EAF6".toColorInt())
             gravity = android.view.Gravity.CENTER
             setPadding(12, 12, 12, 12)
-            textSize = 12f // ✅ Aumentado de 11f a 12f
+            textSize = 12f
             setTextColor("#1976D2".toColorInt())
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             maxLines = 2

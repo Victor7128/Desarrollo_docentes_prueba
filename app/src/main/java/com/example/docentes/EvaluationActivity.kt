@@ -145,19 +145,19 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
         tableView.setAdapter(tableAdapter)
 
         // ✅ AUMENTAR SIGNIFICATIVAMENTE el ancho para nombres completos
-        tableView.setRowHeaderWidth(450) // ✅ Aumentado de 400 a 450
+        tableView.rowHeaderWidth = 450 // ✅ Aumentado de 400 a 450
 
         // ✅ Separadores
-        tableView.setShowHorizontalSeparators(true)
-        tableView.setShowVerticalSeparators(true)
+        tableView.isShowHorizontalSeparators = true
+        tableView.isShowVerticalSeparators = true
 
         try {
-            tableView.setSeparatorColor(android.graphics.Color.parseColor("#DDDDDD"))
+            tableView.separatorColor = "#DDDDDD".toColorInt()
         } catch (e: Exception) {
             Log.w(TAG, "setSeparatorColor no disponible")
         }
 
-        tableView.setTableViewListener(this)
+        tableView.tableViewListener = this
     }
 
     private fun setupButtons() {
@@ -226,20 +226,15 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
     }
 
     private fun displayEvaluationTable(context: EvaluationContext) {
-        // ✅ Actualizar información del header CON FECHA
+        // ✅ Actualizar información del header
         tvSessionInfo.text = parseSessionInfo(sessionTitle)
         tvCompetencyName.text = "🎯 Competencia: ${context.competency.display_name ?: context.competency.name}"
-
-        // ✅ Asegurar que la fecha esté visible
         tvRegistrationDate.text = currentDate
 
-        // ✅ NUEVO: Mostrar capacidades dinámicamente
+        // ✅ Mostrar capacidades
         displayAbilities(context.abilities)
 
-        // ✅ Log con fecha y hora completa
-        Log.d(TAG, "📊 Tabla mostrada el $currentDate a las ${getCurrentDateTime()}")
-
-        // ... resto del código igual para TableView
+        // ✅ Preparar datos para TableView
         val columnHeaders = context.criteria.map { criterion ->
             ColumnHeaderModel(
                 id = "criterion_${criterion.id}",
@@ -247,10 +242,11 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
             )
         }
 
+        // ✅ APLICAR FORMATO DE NOMBRE CON SALTO DE LÍNEA
         val rowHeaders = context.students.map { student ->
             RowHeaderModel(
                 id = "student_${student.id}",
-                title = student.full_name,
+                title = formatStudentName(student.full_name), // ✅ Usar función de formato
                 studentId = student.id
             )
         }
@@ -521,7 +517,6 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
         Log.d(TAG, "Row header double clicked: row=$row")
     }
 
-    // ✅ Métodos auxiliares
     private fun hasUnsavedChanges(): Boolean = pendingChanges.isNotEmpty()
 
     private fun showUnsavedChangesDialog() {
@@ -548,13 +543,31 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
     }
 
     private fun getStudentName(studentId: Int): String {
-        return evaluationContext?.students?.find { it.id == studentId }?.full_name ?: "Estudiante"
+        val student = evaluationContext?.students?.find { it.id == studentId }
+        return student?.
+        full_name ?: "Estudiante"
     }
 
     private fun getCriterionName(criterionId: Int): String {
         return evaluationContext?.criteria?.find { it.id == criterionId }?.let {
             it.display_name ?: it.name
         } ?: "Criterio"
+    }
+
+    private fun formatStudentName(fullName: String): String {
+        // Buscar la coma para dividir apellidos y nombres
+        val commaIndex = fullName.indexOf(',')
+
+        return if (commaIndex != -1 && commaIndex < fullName.length - 1) {
+            val lastName = fullName.substring(0, commaIndex + 1) // Incluye la coma
+            val firstName = fullName.substring(commaIndex + 1).trim()
+
+            // ✅ Formato: "Apellidos,\nNombres"
+            "$lastName\n$firstName"
+        } else {
+            // Si no hay coma, mantener formato original
+            fullName
+        }
     }
 
     @Deprecated("This method has been deprecated in favor of using the\n      {@link OnBackPressedDispatcher} via {@link #getOnBackPressedDispatcher()}.\n      The OnBackPressedDispatcher controls how back button events are dispatched\n      to one or more {@link OnBackPressedCallback} objects.")
