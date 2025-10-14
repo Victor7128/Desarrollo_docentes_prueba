@@ -1,6 +1,7 @@
 package com.example.docentes
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -9,6 +10,10 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.docentes.adapters.BimesterAdapter
 import com.example.docentes.models.BimesterData
+import com.example.docentes.models.Grade
+import com.example.docentes.models.Section
+import com.example.docentes.network.CreateGradeRequest
+import com.example.docentes.network.CreateSectionRequest
 import com.example.docentes.network.RetrofitClient
 import retrofit2.Call
 import retrofit2.Callback
@@ -16,9 +21,17 @@ import retrofit2.Response
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private lateinit var rvBimesters: RecyclerView
     private lateinit var progressBar: ProgressBar
     private lateinit var tvEmptyState: TextView
+    private lateinit var adapter: BimesterAdapter
+
+    private var expandedBimesterId: Int? = null
+    private var expandedGradeId: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,7 +46,9 @@ class MainActivity : AppCompatActivity() {
         loadBimesters()
     }
 
-    private fun loadBimesters() {
+    private fun loadBimesters(keepExpanded: Boolean = false) {
+        Log.d(TAG, "loadBimesters() - keepExpanded: $keepExpanded, expandedBimesterId: $expandedBimesterId, expandedGradeId: $expandedGradeId")
+
         progressBar.visibility = ProgressBar.VISIBLE
         tvEmptyState.visibility = TextView.GONE
 
@@ -48,10 +63,37 @@ class MainActivity : AppCompatActivity() {
                     if (bimesters.isEmpty()) {
                         tvEmptyState.visibility = TextView.VISIBLE
                     } else {
-                        val adapter = BimesterAdapter(bimesters) { bimesterId ->
-                            // TODO: Implementar agregar grado
-                            Toast.makeText(this@MainActivity, "Agregar grado a bimestre $bimesterId", Toast.LENGTH_SHORT).show()
-                        }
+                        Log.d(TAG, "Creating adapter - expandedBimesterId: $expandedBimesterId, expandedGradeId: $expandedGradeId")
+
+                        adapter = BimesterAdapter(
+                            bimesters = bimesters,
+                            expandedBimesterId = if (keepExpanded) expandedBimesterId else null,
+                            expandedGradeId = if (keepExpanded) expandedGradeId else null,
+                            onBimesterExpanded = { bimesterId, isExpanded ->
+                                Log.d(TAG, "onBimesterExpanded - bimesterId: $bimesterId, isExpanded: $isExpanded")
+                                expandedBimesterId = if (isExpanded) bimesterId else null
+                                if (!isExpanded) {
+                                    expandedGradeId = null
+                                    Log.d(TAG, "Bimestre cerrado, reseteando expandedGradeId")
+                                }
+                            },
+                            onGradeExpanded = { gradeId, isExpanded ->
+                                Log.d(TAG, "onGradeExpanded - gradeId: $gradeId, isExpanded: $isExpanded")
+                                expandedGradeId = if (isExpanded) gradeId else null
+                            },
+                            onAddGrade = { bimesterId, gradeNumber ->
+                                addGrade(bimesterId, gradeNumber)
+                            },
+                            onDeleteGrade = { gradeId, gradeNumber ->
+                                deleteGrade(gradeId, gradeNumber)
+                            },
+                            onAddSection = { gradeId, letter ->
+                                addSection(gradeId, letter)
+                            },
+                            onDeleteSection = { sectionId, sectionLetter ->
+                                deleteSection(sectionId, sectionLetter)
+                            }
+                        )
                         rvBimesters.adapter = adapter
                     }
                 } else {
@@ -64,5 +106,149 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Error: ${t.message}", Toast.LENGTH_SHORT).show()
             }
         })
+    }
+
+    private fun addGrade(bimesterId: Int, gradeNumber: Int) {
+        progressBar.visibility = ProgressBar.VISIBLE
+
+        val request = CreateGradeRequest(number = gradeNumber)
+        RetrofitClient.instance.createGrade(bimesterId, request)
+            .enqueue(object : Callback<Grade> {
+                override fun onResponse(call: Call<Grade>, response: Response<Grade>) {
+                    progressBar.visibility = ProgressBar.GONE
+                    if (response.isSuccessful) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Grado $gradeNumber° agregado exitosamente",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        expandedBimesterId = bimesterId
+                        loadBimesters(keepExpanded = true)
+                    } else {
+                        val errorBody = response.errorBody()?.string()
+                        Toast.makeText(
+                            this@MainActivity,
+                            errorBody ?: "Error al agregar grado $gradeNumber°",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+
+                override fun onFailure(call: Call<Grade>, t: Throwable) {
+                    progressBar.visibility = ProgressBar.GONE
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error al agregar grado $gradeNumber°: ${t.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            })
+    }
+
+    private fun deleteGrade(gradeId: Int, gradeNumber: Int) {
+        progressBar.visibility = ProgressBar.VISIBLE
+
+        RetrofitClient.instance.deleteGrade(gradeId)
+            .enqueue(object : Callback<Void> {
+                override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                    progressBar.visibility = ProgressBar.GONE
+                    if (response.isSuccessful) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Grado $gradeNumber° eliminado exitosamente",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        loadBimesters(keepExpanded = true)
+                    } else {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Error al eliminar grado $gradeNumber°",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+
+                override fun onFailure(call: Call<Void>, t: Throwable) {
+                    progressBar.visibility = ProgressBar.GONE
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error al eliminar grado $gradeNumber°: ${t.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            })
+    }
+
+    private fun addSection(gradeId: Int, letter: String?) {
+        progressBar.visibility = ProgressBar.VISIBLE
+
+        val request = CreateSectionRequest(letter = letter)
+        RetrofitClient.instance.createSection(gradeId, request)
+            .enqueue(object : Callback<Section> {
+                override fun onResponse(call: Call<Section>, response: Response<Section>) {
+                    progressBar.visibility = ProgressBar.GONE
+                    if (response.isSuccessful) {
+                        val section = response.body()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Sección ${section?.letter ?: ""} agregada exitosamente",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        expandedGradeId = gradeId
+                        Log.d(TAG, "Sección agregada, manteniendo expandedGradeId: $expandedGradeId")
+                        loadBimesters(keepExpanded = true)
+                    } else {
+                        val errorBody = response.errorBody()?.string()
+                        Toast.makeText(
+                            this@MainActivity,
+                            errorBody ?: "Error al agregar sección",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+
+                override fun onFailure(call: Call<Section>, t: Throwable) {
+                    progressBar.visibility = ProgressBar.GONE
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error al agregar sección: ${t.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            })
+    }
+
+    private fun deleteSection(sectionId: Int, sectionLetter: String) {
+        progressBar.visibility = ProgressBar.VISIBLE
+
+        RetrofitClient.instance.deleteSection(sectionId)
+            .enqueue(object : Callback<Void> {
+                override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                    progressBar.visibility = ProgressBar.GONE
+                    if (response.isSuccessful) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Sección $sectionLetter eliminada exitosamente",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        loadBimesters(keepExpanded = true)
+                    } else {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Error al eliminar sección $sectionLetter",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+
+                override fun onFailure(call: Call<Void>, t: Throwable) {
+                    progressBar.visibility = ProgressBar.GONE
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error al eliminar sección $sectionLetter: ${t.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            })
     }
 }

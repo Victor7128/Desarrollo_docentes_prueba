@@ -47,22 +47,9 @@
                 android:textColor="@android:color/black"
                 android:layout_marginStart="8dp"
                 app:layout_constraintStart_toEndOf="@id/ivGradeExpandIcon"
-                app:layout_constraintEnd_toStartOf="@id/btnEditGrade"
-                app:layout_constraintTop_toTopOf="parent"
-                app:layout_constraintBottom_toBottomOf="parent" />
-
-            <ImageButton
-                android:id="@+id/btnEditGrade"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:src="@drawable/ic_edit"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Editar grado"
-                android:padding="6dp"
                 app:layout_constraintEnd_toStartOf="@id/btnDeleteGrade"
                 app:layout_constraintTop_toTopOf="parent"
-                app:layout_constraintBottom_toBottomOf="parent"
-                app:tint="@color/accentColor" />
+                app:layout_constraintBottom_toBottomOf="parent" />
 
             <ImageButton
                 android:id="@+id/btnDeleteGrade"
@@ -98,16 +85,15 @@
                 android:nestedScrollingEnabled="false" />
 
             <!-- Botón para agregar sección -->
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnAddSection"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="+ Agregar Sección"
                 android:textColor="@color/secondaryColor"
                 android:textSize="14sp"
-                android:background="@drawable/bg_button_outline_small"
                 android:layout_marginTop="6dp"
-                style="?attr/materialButtonOutlinedStyle" />
+                style="@style/Widget.Material3.Button.OutlinedButton" />
 
         </LinearLayout>
 
