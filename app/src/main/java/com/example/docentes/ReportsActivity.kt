@@ -1,5 +1,6 @@
 package com.example.docentes
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -7,40 +8,38 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.evrencoskun.tableview.TableView
-import com.example.docentes.adapters.ReportsTableAdapter
-import com.example.docentes.models.*
-import com.example.docentes.network.RetrofitClient
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.launch
-import androidx.core.graphics.toColorInt
+import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.example.docentes.adapters.ReportStudentAdapter
+import com.example.docentes.models.*
+import com.example.docentes.network.RetrofitClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 class ReportsActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ReportsActivity"
     }
-
-    // ✅ Views
     private lateinit var toolbar: MaterialToolbar
     private lateinit var tvSectionTitle: TextView
     private lateinit var tvCompetencyName: TextView
-    private lateinit var tableView: TableView
     private lateinit var btnExportExcel: MaterialButton
     private lateinit var progressBar: android.widget.ProgressBar
+    private lateinit var swipeRefresh: SwipeRefreshLayout
+    private lateinit var rvStudents: RecyclerView
+    private lateinit var studentAdapter: ReportStudentAdapter
 
-    // ✅ TableView components
-    private lateinit var tableAdapter: ReportsTableAdapter
-
-    // ✅ Datos del Intent
     private var sectionId: Int = -1
     private var competencyId: Int = -1
     private var sectionName: String = ""
-
-    // ✅ Solo una variable para datos consolidados
     private var consolidatedData: ConsolidatedResponse? = null
-
     private val editedAverages = mutableMapOf<String, String?>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,10 +49,8 @@ class ReportsActivity : AppCompatActivity() {
         initViews()
         getIntentData()
         setupToolbar()
-        setupTableView()
         setupButtons()
-
-        // ✅ Cargar datos del consolidado
+        setupSwipeRefresh()
         loadReportsData()
     }
 
@@ -61,14 +58,18 @@ class ReportsActivity : AppCompatActivity() {
         toolbar = findViewById(R.id.toolbar)
         tvSectionTitle = findViewById(R.id.tvSectionTitle)
         tvCompetencyName = findViewById(R.id.tvCompetencyName)
-        tableView = findViewById(R.id.tableView)
         btnExportExcel = findViewById(R.id.btnExportExcel)
         progressBar = findViewById(R.id.progressBar)
+        swipeRefresh = findViewById(R.id.swipeRefreshLayout)
+        rvStudents = findViewById(R.id.rvStudents)
+
+        rvStudents.layoutManager = LinearLayoutManager(this)
+        rvStudents.visibility = View.VISIBLE
     }
 
     private fun getIntentData() {
         sectionId = intent.getIntExtra("SECTION_ID", -1)
-        competencyId = intent.getIntExtra("COMPETENCY_ID", -1) // ✅ Puede ser -1
+        competencyId = intent.getIntExtra("COMPETENCY_ID", -1)
         sectionName = intent.getStringExtra("SECTION_NAME") ?: "Sección"
 
         Log.d(TAG, "Intent data: SECTION_ID=$sectionId, COMPETENCY_ID=$competencyId, SECTION_NAME=$sectionName")
@@ -78,46 +79,28 @@ class ReportsActivity : AppCompatActivity() {
             finish()
             return
         }
-
-        // ✅ COMPETENCY_ID es opcional para consolidado general
-        if (competencyId == -1) {
-            Log.d(TAG, "Cargando consolidado general (todas las competencias)")
-        }
     }
 
     private fun setupToolbar() {
-        toolbar.title = "Consolidado - $sectionName"
+        setSupportActionBar(toolbar)
+        supportActionBar?.apply {
+            setDisplayHomeAsUpEnabled(true)
+            setDisplayShowHomeEnabled(true)
+            title = "Consolidado - $sectionName"
+        }
         toolbar.setNavigationOnClickListener { finish() }
     }
 
-    private fun setupTableView() {
-        // ✅ Crear adapter con nuevos callbacks
-        tableAdapter = ReportsTableAdapter(
-            context = this,
-            onGradeChanged = { studentId, abilityId, grade ->
-                handleAverageChange(studentId, abilityId, grade)
-            },
-            onObservationClicked = { studentId, criterionId ->
-                showObservationDialog(studentId, criterionId)
-            }
-        )
-
-        // ✅ Configurar TableView con ancho mayor para headers multinivel
-        tableView.setAdapter(tableAdapter)
-        tableView.rowHeaderWidth = 350 // Ancho para nombres completos
-        tableView.isShowHorizontalSeparators = true
-        tableView.isShowVerticalSeparators = true
-
-        // ✅ Configurar scroll más suave
-        try {
-            tableView.separatorColor = "#E0E0E0".toColorInt()
-        } catch (e: Exception) {
-            Log.w(TAG, "setSeparatorColor no disponible")
+    private fun setupButtons() {
+        btnExportExcel.setOnClickListener {
+            generatePdfReport()
         }
     }
 
-    private fun setupButtons() {
-        btnExportExcel.setOnClickListener { exportToExcel() }
+    private fun setupSwipeRefresh() {
+        swipeRefresh.setOnRefreshListener {
+            loadReportsData()
+        }
     }
 
     private fun loadReportsData() {
@@ -126,9 +109,7 @@ class ReportsActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                // ✅ USAR TU ENDPOINT EXISTENTE
                 val consolidatedResponse = RetrofitClient.apiService.getConsolidatedReport(sectionId)
-
                 consolidatedData = consolidatedResponse
                 displayConsolidatedTable(consolidatedResponse)
 
@@ -139,271 +120,641 @@ class ReportsActivity : AppCompatActivity() {
                 Log.d(TAG, "  Abilities: ${consolidatedResponse.abilities.size}")
                 Log.d(TAG, "  Criteria: ${consolidatedResponse.criteria.size}")
                 Log.d(TAG, "  Values: ${consolidatedResponse.values.size}")
-
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Error cargando consolidado", e)
                 Toast.makeText(this@ReportsActivity,
-                    "Error: ${e.message}", Toast.LENGTH_LONG).show()
-
-                // ✅ Cargar datos de prueba como fallback
+                    "Error de red. Cargando datos de prueba...", Toast.LENGTH_SHORT).show()
                 loadTestConsolidatedData()
-
             } finally {
                 showLoading(false)
+                swipeRefresh.isRefreshing = false
             }
         }
     }
 
     private fun displayConsolidatedTable(data: ConsolidatedResponse) {
-        // ✅ Actualizar información del header con más detalles
-        tvSectionTitle.text = "Consolidado $sectionName"
-
-        // ✅ Mostrar competencia principal o resumen
-        val competenciesText = if (data.competencies.size == 1) {
+        tvSectionTitle.text = "Consolidado - $sectionName"
+        tvCompetencyName.text = if (data.competencies.size == 1)
             data.competencies.first().display_name
-        } else {
-            "${data.competencies.size} Competencias Evaluadas"
-        }
-        tvCompetencyName.text = competenciesText
+        else
+            "${data.competencies.size} Competencias | ${data.sessions.size} Sesiones"
 
-        // ✅ Preparar headers multinivel usando TUS datos
-        val columnHeaders = createConsolidatedHeaders(data)
-        val rowHeaders = data.students.mapIndexed { index, student ->
-            ReportRowHeaderModel(
-                id = "student_${student.id}",
-                title = formatStudentName(student.full_name),
-                studentId = student.id,
-                number = index + 1
-            )
-        }
+        val abilitiesByCompetency = data.abilities.groupBy { it.competency_id }
+        val criteriaByAbility = data.criteria.groupBy { it.ability_id }
 
-        // ✅ Preparar celdas multinivel usando TUS datos
-        val cells = createConsolidatedCells(data)
-
-        // ✅ Establecer datos en TableView
-        tableAdapter.setAllItems(columnHeaders, rowHeaders, cells)
-
-        // ✅ Log detallado de la estructura
-        Log.d(TAG, "📊 Tabla multinivel cargada:")
-        Log.d(TAG, "  Students: ${data.students.size}")
-        Log.d(TAG, "  Sessions: ${data.sessions.size}")
-        Log.d(TAG, "  Competencies: ${data.competencies.size}")
-        Log.d(TAG, "  Abilities: ${data.abilities.size}")
-        Log.d(TAG, "  Criteria: ${data.criteria.size}")
-        Log.d(TAG, "  Column Headers: ${columnHeaders.size}")
-        Log.d(TAG, "  Cell Rows: ${cells.size}")
+        // ⭐ AHORA PASAMOS LAS SESIONES AL ADAPTER
+        studentAdapter = ReportStudentAdapter(
+            students = data.students,
+            sessions = data.sessions,
+            competencies = data.competencies,
+            abilitiesByCompetency = abilitiesByCompetency,
+            criteriaByAbility = criteriaByAbility,
+            values = data.values,
+            observations = data.observations,
+            onEditAverage = { studentId, abilityId, value ->
+                handleAverageChange(studentId, abilityId, value)
+            },
+            onEditFinalAverage = { studentId, value ->
+                handleFinalAverageChange(studentId, value)
+            },
+            onObservationClick = { studentId, abilityId, criterionId ->
+                showObservationDialog(studentId, abilityId, criterionId)
+            }
+        )
+        rvStudents.adapter = studentAdapter
 
         Toast.makeText(this,
-            "✅ Consolidado multinivel: ${data.students.size} estudiantes, ${data.sessions.size} sesiones",
-            Toast.LENGTH_SHORT).show()
+            "✅ ${data.students.size} estudiantes | ${data.sessions.size} sesiones",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun handleAverageChange(studentId: Int, abilityId: Int?, grade: String?) {
         val key = "${studentId}_${abilityId ?: "final"}"
         editedAverages[key] = grade
-
         Log.d(TAG, "📝 Promedio editado: Student $studentId, Ability $abilityId = $grade")
-
-        // ✅ Marcar como modificado (para futuro guardado)
-        // TODO: Implementar guardado de promedios editados
     }
 
-    private fun showObservationDialog(studentId: Int, criterionId: Int) {
-        val studentName = getStudentName(studentId)
-        val criterionName = getCriterionName(criterionId)
+    private fun handleFinalAverageChange(studentId: Int, grade: String?) {
+        val key = "${studentId}_final"
+        editedAverages[key] = grade
+        Log.d(TAG, "📝 Promedio final editado: Student $studentId = $grade")
+    }
 
-        // ✅ Buscar observación existente
+    private fun showObservationDialog(studentId: Int, abilityId: Int, criterionId: Int) {
+        val studentName = getStudentName(studentId)
+        val abilityName = getAbilityName(abilityId)
         val currentObservation = consolidatedData?.observations?.find {
-            it.student_id == studentId &&
-                    // Buscar por criterion o ability relacionada
-                    consolidatedData?.criteria?.find { c -> c.id == criterionId }?.ability_id == it.ability_id
+            it.student_id == studentId && it.ability_id == abilityId
         }?.observation ?: ""
 
         val editText = android.widget.EditText(this).apply {
             setText(currentObservation)
-            hint = "Observación para $criterionName..."
-            setPadding(16, 16, 16, 16)
+            hint = "Observación para $abilityName..."
+            setPadding(48, 48, 48, 16)
             minLines = 3
-            maxLines = 5
+            maxLines = 8
+            textSize = 14f
         }
 
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("📝 Observación")
-            .setMessage("Estudiante: $studentName\nCriterio: $criterionName")
+            .setMessage("Estudiante: $studentName\nCapacidad: $abilityName")
             .setView(editText)
             .setPositiveButton("Guardar") { _, _ ->
                 val observation = editText.text.toString().trim()
-                saveObservation(studentId, criterionId, observation.ifEmpty { null })
+                saveObservation(studentId, abilityId, observation.ifEmpty { null })
             }
             .setNegativeButton("Cancelar", null)
             .setNeutralButton("Limpiar") { _, _ ->
-                saveObservation(studentId, criterionId, null)
+                saveObservation(studentId, abilityId, null)
             }
             .show()
 
-        editText.selectAll()
         editText.requestFocus()
+        editText.selectAll()
     }
 
-    private fun saveObservation(studentId: Int, criterionId: Int, observation: String?) {
-        Log.d(TAG, "💾 Guardando observación: Student $studentId, Criterion $criterionId")
-
-        // TODO: Implementar guardado de observaciones
-        // Por ahora solo actualizar en memoria
+    private fun saveObservation(studentId: Int, abilityId: Int, observation: String?) {
+        Log.d(TAG, "💾 Guardando observación: Student $studentId, Ability $abilityId")
 
         val message = if (observation.isNullOrEmpty()) {
             "🗑️ Observación eliminada"
         } else {
             "💾 Observación guardada"
         }
-
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
-        // ✅ Recargar datos para reflejar cambios
-        // loadReportsData()
+        updateLocalObservation(studentId, abilityId, observation)
+        studentAdapter.notifyDataSetChanged()
     }
 
-    private fun createConsolidatedHeaders(data: ConsolidatedResponse): List<ReportColumnHeaderModel> {
-        val headers = mutableListOf<ReportColumnHeaderModel>()
-
-        // ✅ PASO 1: Organizar datos por sesión → competencia → capacidad
-        val sessionDataMap = organizeDataBySession(data)
-
-        sessionDataMap.forEach { (session, competencies) ->
-
-            // ✅ NIVEL 1: Header de Sesión (si hay múltiples sesiones)
-            if (sessionDataMap.size > 1) {
-                val sessionColspan = calculateSessionColspan(competencies)
-                headers.add(
-                    ReportColumnHeaderModel(
-                        id = "session_${session.id}",
-                        title = session.title ?: "Sesión ${session.number}",
-                        level = 1,
-                        colspan = sessionColspan,
-                        rowspan = 1,
-                        sessionId = session.id,
-                        backgroundColor = "#F5F5F5"
-                    )
-                )
+    private fun updateLocalObservation(studentId: Int, abilityId: Int, observation: String?) {
+        consolidatedData?.let { data ->
+            val mutableObs = data.observations.toMutableList()
+            val existingIndex = mutableObs.indexOfFirst {
+                it.student_id == studentId && it.ability_id == abilityId
             }
 
-            competencies.forEach { competencyData ->
-                val competency = competencyData.competency
-
-                // ✅ NIVEL 2: Header de Competencia
-                val competencyColspan = calculateCompetencyColspan(competencyData.abilities)
-                headers.add(
-                    ReportColumnHeaderModel(
-                        id = "competency_${competency.id}",
-                        title = competency.display_name,
-                        level = 2,
-                        colspan = competencyColspan,
-                        rowspan = 1,
-                        sessionId = session.id,
-                        competencyId = competency.id,
-                        backgroundColor = "#E8F5E8"
-                    )
-                )
-
-                competencyData.abilities.forEach { abilityData ->
-                    val ability = abilityData.ability
-
-                    // ✅ NIVEL 3: Header de Capacidad
-                    val abilityColspan = (abilityData.criteria.size * 2) + 1 // criterios + observaciones + PROM
-                    headers.add(
-                        ReportColumnHeaderModel(
-                            id = "ability_${ability.id}",
-                            title = ability.display_name,
-                            level = 3,
-                            colspan = abilityColspan,
-                            rowspan = 1,
-                            sessionId = session.id,
-                            competencyId = competency.id,
-                            abilityId = ability.id,
-                            backgroundColor = "#E8EAF6"
-                        )
-                    )
-
-                    // ✅ NIVEL 4: Criterios + Observaciones
-                    abilityData.criteria.forEach { criterion ->
-                        // Criterio
-                        headers.add(
-                            ReportColumnHeaderModel(
-                                id = "criterion_${criterion.id}",
-                                title = criterion.display_name,
-                                level = 4,
-                                sessionId = session.id,
-                                competencyId = competency.id,
-                                abilityId = ability.id,
-                                criterionId = criterion.id,
-                                backgroundColor = "#FFFFFF"
-                            )
-                        )
-
-                        // ✅ Observación (junto al criterio)
-                        headers.add(
-                            ReportColumnHeaderModel(
-                                id = "obs_${criterion.id}",
-                                title = "📝",
-                                level = 4,
-                                sessionId = session.id,
-                                competencyId = competency.id,
-                                abilityId = ability.id,
-                                criterionId = criterion.id,
-                                isObservation = true,
-                                backgroundColor = "#FFF8E1"
-                            )
-                        )
-                    }
-
-                    // ✅ PROM de Capacidad (vacío y editable)
-                    headers.add(
-                        ReportColumnHeaderModel(
-                            id = "prom_ability_${ability.id}",
-                            title = "PROM.",
-                            level = 4,
-                            sessionId = session.id,
-                            competencyId = competency.id,
-                            abilityId = ability.id,
-                            isPromedio = true,
-                            isEditable = true, // ✅ Permite edición
-                            backgroundColor = "#E3F2FD"
-                        )
-                    )
+            if (observation.isNullOrEmpty()) {
+                if (existingIndex != -1) {
+                    mutableObs.removeAt(existingIndex)
+                }
+            } else {
+                if (existingIndex != -1) {
+                    mutableObs[existingIndex] = ConsolidatedObservation(studentId, abilityId, observation)
+                } else {
+                    mutableObs.add(ConsolidatedObservation(studentId, abilityId, observation))
                 }
             }
+
+            consolidatedData = data.copy(observations = mutableObs)
         }
-
-        // ✅ PROMEDIO FINAL (vacío y editable)
-        headers.add(
-            ReportColumnHeaderModel(
-                id = "promedio_final",
-                title = "PROMEDIO",
-                level = 3,
-                rowspan = 2,
-                isPromedioFinal = true,
-                isEditable = true,
-                backgroundColor = "#FFF3E0"
-            )
-        )
-
-        return headers
     }
 
-    private fun calculatePromedio(grades: List<String?>): String? {
-        val validGrades = grades.mapNotNull { grade ->
-            when (grade) {
-                "AD" -> 4
-                "A" -> 3
-                "B" -> 2
-                "C" -> 1
-                else -> null
+    private fun generatePdfReport() {
+        val currentDate = java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        val fileName = "consolidado_${sectionName.replace(" ", "_")}_$currentDate.html"
+
+        Toast.makeText(this, "🎨 Generando reporte profesional...", Toast.LENGTH_SHORT).show()
+
+        lifecycleScope.launch {
+            try {
+                val success = generatePdfReport(fileName)
+
+                if (success) {
+                    Toast.makeText(this@ReportsActivity,
+                        "✅ Reporte HTML generado\n📱 Fácil de leer y compartir",
+                        Toast.LENGTH_LONG).show()
+
+                    // Compartir el archivo
+                    shareHtmlFile(fileName)
+                } else {
+                    Toast.makeText(this@ReportsActivity,
+                        "❌ Error al generar reporte",
+                        Toast.LENGTH_LONG).show()
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error en exportación", e)
+                Toast.makeText(this@ReportsActivity,
+                    "❌ Error: ${e.message}",
+                    Toast.LENGTH_LONG).show()
             }
         }
+    }
 
-        if (validGrades.isEmpty()) return null
+    private suspend fun generatePdfReport(fileName: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val consolidatedData = consolidatedData ?: return@withContext false
 
-        val average = validGrades.average()
+                // Crear contenido HTML bonito
+                val htmlContent = buildBeautifulHtmlReport(consolidatedData)
+
+                val downloadsDir = getExternalFilesDir(null) ?: filesDir
+                val file = File(downloadsDir, fileName)
+
+                FileOutputStream(file).use { fos ->
+                    fos.write(htmlContent.toByteArray(Charsets.UTF_8))
+                }
+
+                Log.d(TAG, "✅ Reporte HTML exportado: ${file.absolutePath}")
+                true
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error generando reporte", e)
+                false
+            }
+        }
+    }
+
+    private fun shareHtmlFile(fileName: String) {
+        val file = File(getExternalFilesDir(null), fileName)
+
+        try {
+            if (!file.exists()) {
+                Toast.makeText(this, "❌ Archivo no encontrado", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "${packageName}.provider",
+                file
+            )
+
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/html"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "Consolidado $sectionName")
+                putExtra(Intent.EXTRA_TEXT, "Consolidado de evaluaciones - $sectionName\n\n📝 Para ver correctamente:\n• Ábrelo con cualquier navegador\n• O guárdalo y ábrelo con Word/Excel")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            startActivity(Intent.createChooser(shareIntent, "Compartir Reporte"))
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error compartiendo archivo", e)
+            Toast.makeText(this,
+                "✅ Archivo guardado en: ${file.absolutePath}\n\n📝 Para abrir:\n• Cópialo a tu PC\n• Ábrelo con cualquier navegador\n• Se verá profesional y organizado",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun buildBeautifulHtmlReport(data: ConsolidatedResponse): String {
+        val builder = StringBuilder()
+
+        builder.append("""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Consolidado $sectionName</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            background: #f8f9fa;
+            padding: 20px;
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { 
+            font-size: 28px; 
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        .header .subtitle { 
+            font-size: 16px; 
+            opacity: 0.9;
+        }
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card .number { 
+            font-size: 24px; 
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        .card .label { 
+            font-size: 14px; 
+            color: #666;
+        }
+        .student-section {
+            padding: 20px;
+        }
+        .student-card {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+        .student-header {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;  // ← CORREGIDO
+            align-items: center;
+        }
+        .student-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #495057;
+        }
+        .student-number {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+        .student-content {
+            padding: 20px;
+        }
+        .session-group {
+            margin-bottom: 20px;
+        }
+        .session-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 2px solid #667eea;
+        }
+        .competency-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        .competency-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+        .competency-name {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #495057;
+        }
+        .ability-item {
+            margin-bottom: 8px;
+            padding-left: 10px;
+        }
+        .ability-name {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .criteria-list {
+            list-style: none;
+        }
+        .criterion-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .criterion-name {
+            flex: 1;
+        }
+        .grade {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .grade-ad { background: #d4edda; color: #155724; }
+        .grade-a { background: #d1ecf1; color: #0c5460; }
+        .grade-b { background: #fff3cd; color: #856404; }
+        .grade-c { background: #f8d7da; color: #721c24; }
+        .final-average {
+            background: #495057;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 10px;
+            text-align: center;
+        }
+        .observations {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #007bff;
+        }
+        .observations-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #0056b3;
+        }
+        .observation-item {
+            margin-bottom: 5px;
+            padding-left: 10px;
+        }
+        .legend {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+        .legend-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .legend-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            color: #666;
+            font-size: 12px;
+            border-top: 1px solid #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Consolidado de Evaluaciones</h1>
+            <div class="subtitle">$sectionName</div>
+        </div>
+        
+        <div class="summary-cards">
+            <div class="card">
+                <div class="number">${data.students.size}</div>
+                <div class="label">Estudiantes</div>
+            </div>
+            <div class="card">
+                <div class="number">${data.sessions.size}</div>
+                <div class="label">Sesiones</div>
+            </div>
+            <div class="card">
+                <div class="number">${data.competencies.size}</div>
+                <div class="label">Competencias</div>
+            </div>
+            <div class="card">
+                <div class="number">${data.criteria.size}</div>
+                <div class="label">Criterios</div>
+            </div>
+        </div>
+        
+        <div class="student-section">
+    """)
+
+        // Estudiantes
+        data.students.forEachIndexed { index, student ->
+            builder.append("""
+        <div class="student-card">
+            <div class="student-header">
+                <div class="student-name">${student.full_name}</div>
+                <div class="student-number">Estudiante ${index + 1}</div>
+            </div>
+            <div class="student-content">
+        """)
+
+            // Sesiones - CORRECCIÓN: Filtrar por session.id
+            data.sessions.sortedBy { it.number }.forEach { session ->
+                builder.append("""
+            <div class="session-group">
+                <div class="session-title">${session.title ?: "Sesión ${session.number}"}</div>
+                <div class="competency-grid">
+            """)
+
+                // ✅ CORRECCIÓN: Solo mostrar competencias de ESTA sesión
+                val competenciesInSession = data.competencies.filter { it.session_id == session.id }
+
+                if (competenciesInSession.isEmpty()) {
+                    builder.append("""
+                <div class="competency-card">
+                    <div class="competency-name">No hay competencias evaluadas</div>
+                </div>
+                """)
+                } else {
+                    competenciesInSession.forEach { competency ->
+                        builder.append("""
+                    <div class="competency-card">
+                        <div class="competency-name">${competency.display_name}</div>
+                    """)
+
+                        val abilities = data.abilities.filter { it.competency_id == competency.id }
+                        abilities.forEach { ability ->
+                            builder.append("""
+                        <div class="ability-item">
+                            <div class="ability-name">${ability.display_name}</div>
+                            <ul class="criteria-list">
+                        """)
+
+                            val criteria = data.criteria.filter { it.ability_id == ability.id }
+                            criteria.forEach { criterion ->
+                                val value = data.values.find {
+                                    it.student_id == student.id && it.criterion_id == criterion.id
+                                }?.value ?: "-"
+
+                                val gradeClass = when (value) {
+                                    "AD" -> "grade-ad"
+                                    "A" -> "grade-a"
+                                    "B" -> "grade-b"
+                                    "C" -> "grade-c"
+                                    else -> ""
+                                }
+
+                                builder.append("""
+                            <li class="criterion-item">
+                                <span class="criterion-name">${criterion.display_name}</span>
+                                <span class="grade $gradeClass">$value</span>
+                            </li>
+                            """)
+                            }
+                            builder.append("</ul></div>")
+                        }
+                        builder.append("</div>")
+                    }
+                }
+                builder.append("</div></div>")
+            }
+
+            // Promedio final
+            val finalAverage = calculateStudentFinalAverage(student.id) ?: "-"
+            val finalGradeClass = when (finalAverage) {
+                "AD" -> "grade-ad"
+                "A" -> "grade-a"
+                "B" -> "grade-b"
+                "C" -> "grade-c"
+                else -> ""
+            }
+
+            builder.append("""
+            <div class="final-average $finalGradeClass">
+                Promedio Final: $finalAverage
+            </div>
+        """)
+
+            // Observaciones
+            val studentObservations = data.observations.filter { it.student_id == student.id }
+            if (studentObservations.isNotEmpty()) {
+                builder.append("""
+                <div class="observations">
+                    <div class="observations-title">📝 Observaciones</div>
+            """)
+
+                studentObservations.forEach { obs ->
+                    val abilityName = data.abilities.find { it.id == obs.ability_id }?.display_name ?: ""
+                    builder.append("""
+                    <div class="observation-item">
+                        <strong>$abilityName:</strong> ${obs.observation}
+                    </div>
+                """)
+                }
+
+                builder.append("</div>")
+            }
+
+            builder.append("</div></div>")
+        }
+
+        // Leyenda
+        builder.append("""
+        <div class="legend">
+            <div class="legend-title">Leyenda de Calificaciones</div>
+            <div class="legend-items">
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #d4edda;"></div>
+                    <span>AD - Logro destacado</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #d1ecf1;"></div>
+                    <span>A - Logro esperado</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #fff3cd;"></div>
+                    <span>B - En proceso</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #f8d7da;"></div>
+                    <span>C - En inicio</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            Generado el ${java.text.SimpleDateFormat("dd/MM/yyyy 'a las' HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}
+        </div>
+    </div>
+</body>
+</html>
+    """)
+
+        return builder.toString()
+    }
+
+    private fun calculateStudentFinalAverage(studentId: Int): String? {
+        val consolidatedData = consolidatedData ?: return null
+
+        val allGrades = mutableListOf<String>()
+
+        // Recoger todas las calificaciones del estudiante
+        consolidatedData.values
+            .filter { it.student_id == studentId }
+            .forEach { value ->
+                if (value.value in listOf("AD", "A", "B", "C")) {
+                    allGrades.add(value.value)
+                }
+            }
+
+        if (allGrades.isEmpty()) return null
+
+        val gradeValues = mapOf("AD" to 4, "A" to 3, "B" to 2, "C" to 1)
+        val sum = allGrades.mapNotNull { gradeValues[it] }.sum()
+        if (sum == 0) return null
+
+        val average = sum.toDouble() / allGrades.size
         return when {
             average >= 3.5 -> "AD"
             average >= 2.5 -> "A"
@@ -412,67 +763,25 @@ class ReportsActivity : AppCompatActivity() {
         }
     }
 
-    private fun formatStudentName(fullName: String): String {
-        val commaIndex = fullName.indexOf(',')
-        return if (commaIndex != -1 && commaIndex < fullName.length - 1) {
-            val lastName = fullName.substring(0, commaIndex + 1)
-            val firstName = fullName.substring(commaIndex + 1).trim()
-            "$lastName\n$firstName"
-        } else {
-            fullName
-        }
-    }
-
-    private fun showGradeDetails(studentId: Int, sessionId: Int, criterionId: Int, grade: String?) {
-        val studentName = getStudentName(studentId)
-        val criterionName = getCriterionName(criterionId)
-
-        Toast.makeText(this,
-            "📋 $studentName\n📝 $criterionName\n📊 Nota: ${grade ?: "Sin evaluar"}",
-            Toast.LENGTH_LONG).show()
-    }
-
-    private fun exportToExcel() {
-        val currentDate = java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm", java.util.Locale.getDefault())
-            .format(java.util.Date())
-
-        val fileName = "consolidado_${sectionName.replace(" ", "_")}_$currentDate.xlsx"
-
-        Toast.makeText(this,
-            "📊 Exportando $fileName...\n✅ Incluye estructura multinivel y promedios editables",
-            Toast.LENGTH_LONG).show()
-
-        Log.d(TAG, "📤 Iniciando exportación consolidado multinivel:")
-        Log.d(TAG, "  Archivo: $fileName")
-        Log.d(TAG, "  Promedios editados: ${editedAverages.size}")
-        Log.d(TAG, "  Sección: $sectionName")
-
-        // TODO: Implementar exportación real a Excel con estructura multinivel
-        // - Headers jerárquicos
-        // - Celdas de observaciones
-        // - Promedios editables
-        // - Formato profesional
-    }
-
     private fun loadTestConsolidatedData() {
-        Log.d(TAG, "🧪 Cargando datos de prueba multinivel...")
+        Log.d(TAG, "🧪 Cargando datos de prueba con sesiones...")
 
         try {
-            // ✅ Datos de prueba más completos para multinivel
             val testData = ConsolidatedResponse(
                 students = listOf(
-                    ConsolidatedStudent(1, "ABILA SOLANO, PIERO ALEXANDER"),
-                    ConsolidatedStudent(2, "ACOSTA LINARES, JHOSY ANTHONY"),
-                    ConsolidatedStudent(3, "ALCANTARA DIAZ, IRVIN LEONARDO"),
-                    ConsolidatedStudent(4, "ALEJANDRO HERNANDEZ, KAROL NICOLE"),
-                    ConsolidatedStudent(5, "APONTE SAUCEDA, YASMIN YERALDI")
+                    ConsolidatedStudent(1, "GARCÍA LÓPEZ, ANA MARÍA"),
+                    ConsolidatedStudent(2, "MARTÍNEZ PÉREZ, CARLOS EDUARDO"),
+                    ConsolidatedStudent(3, "RODRÍGUEZ SILVA, MARÍA FERNANDA"),
+                    ConsolidatedStudent(4, "LÓPEZ TORRES, JUAN PABLO"),
+                    ConsolidatedStudent(5, "GONZÁLEZ RAMÍREZ, SOFÍA VALENTINA")
                 ),
                 sessions = listOf(
-                    ConsolidatedSession(1, "Sesión 1 - Soluciones Tecnológicas", 1),
-                    ConsolidatedSession(2, "Sesión 2 - Evaluación Final", 2)
+                    ConsolidatedSession(1, "Sesión 1 - Identificación del problema", 1),
+                    ConsolidatedSession(2, "Sesión 2 - Diseño de prototipo", 2),
+                    ConsolidatedSession(3, "Sesión 3 - Evaluación final", 3)
                 ),
                 competencies = listOf(
-                    ConsolidatedCompetency(1, 1, "Comunicamos nuestra solución tecnológica relacionada a las bajas temperaturas")
+                    ConsolidatedCompetency(1, 1, "Diseña y construye soluciones tecnológicas")
                 ),
                 abilities = listOf(
                     ConsolidatedAbility(1, 1, "Determina una alternativa de solución"),
@@ -481,188 +790,92 @@ class ReportsActivity : AppCompatActivity() {
                     ConsolidatedAbility(4, 1, "Evalúa y comunica")
                 ),
                 criteria = listOf(
-                    ConsolidatedCriterion(1, 1, "Propone una alternativa de solución tecnológica"),
-                    ConsolidatedCriterion(2, 2, "Representa la solución tecnológica en dibujo o diagrama de flujo"),
-                    ConsolidatedCriterion(3, 3, "Construye el prototipo de la solución tecnológica"),
-                    ConsolidatedCriterion(4, 3, "Realiza pruebas de funcionamiento y reajustes"),
-                    ConsolidatedCriterion(5, 4, "Fluidez y claridad en la exposición"),
-                    ConsolidatedCriterion(6, 4, "Pertinencia del prototipo frente al problema identificado")
+                    ConsolidatedCriterion(1, 1, "Propone alternativa tecnológica"),
+                    ConsolidatedCriterion(2, 1, "Identifica el problema claramente"),
+                    ConsolidatedCriterion(3, 2, "Representa en dibujo técnico"),
+                    ConsolidatedCriterion(4, 2, "Selecciona materiales adecuados"),
+                    ConsolidatedCriterion(5, 3, "Construye el prototipo"),
+                    ConsolidatedCriterion(6, 3, "Realiza pruebas y ajustes"),
+                    ConsolidatedCriterion(7, 4, "Fluidez en la exposición"),
+                    ConsolidatedCriterion(8, 4, "Pertinencia del prototipo")
                 ),
                 values = listOf(
-                    // Estudiante 1
-                    ConsolidatedValue(1, 1, "C"),
+                    // Estudiante 1 - Ana María
+                    ConsolidatedValue(1, 1, "A"),
+                    ConsolidatedValue(1, 2, "A"),
                     ConsolidatedValue(1, 3, "AD"),
-                    // Estudiante 2
-                    ConsolidatedValue(2, 1, "A"),
+                    ConsolidatedValue(1, 4, "A"),
+                    ConsolidatedValue(1, 5, "AD"),
+                    ConsolidatedValue(1, 6, "A"),
+                    ConsolidatedValue(1, 7, "AD"),
+                    ConsolidatedValue(1, 8, "AD"),
+
+                    // Estudiante 2 - Carlos Eduardo
+                    ConsolidatedValue(2, 1, "B"),
                     ConsolidatedValue(2, 2, "A"),
                     ConsolidatedValue(2, 3, "A"),
-                    ConsolidatedValue(2, 4, "A"),
+                    ConsolidatedValue(2, 4, "B"),
                     ConsolidatedValue(2, 5, "A"),
-                    ConsolidatedValue(2, 6, "A"),
-                    // Estudiante 3
-                    ConsolidatedValue(3, 3, "C"),
-                    // Estudiante 4
-                    ConsolidatedValue(4, 1, "A"),
-                    ConsolidatedValue(4, 2, "A"),
-                    ConsolidatedValue(4, 3, "A"),
-                    ConsolidatedValue(4, 4, "A"),
-                    ConsolidatedValue(4, 5, "A"),
-                    ConsolidatedValue(4, 6, "A"),
-                    // Estudiante 5
+                    ConsolidatedValue(2, 7, "B"),
+                    ConsolidatedValue(2, 8, "A"),
+
+                    // Estudiante 3 - María Fernanda
+                    ConsolidatedValue(3, 1, "AD"),
+                    ConsolidatedValue(3, 2, "AD"),
+                    ConsolidatedValue(3, 3, "AD"),
+                    ConsolidatedValue(3, 4, "A"),
+                    ConsolidatedValue(3, 5, "AD"),
+                    ConsolidatedValue(3, 6, "AD"),
+                    ConsolidatedValue(3, 7, "AD"),
+                    ConsolidatedValue(3, 8, "AD"),
+
+                    // Estudiante 4 - Juan Pablo
+                    ConsolidatedValue(4, 1, "C"),
+                    ConsolidatedValue(4, 2, "B"),
+                    ConsolidatedValue(4, 3, "B"),
+                    ConsolidatedValue(4, 5, "B"),
+                    ConsolidatedValue(4, 6, "C"),
+                    ConsolidatedValue(4, 7, "C"),
+                    ConsolidatedValue(4, 8, "B"),
+
+                    // Estudiante 5 - Sofía Valentina
                     ConsolidatedValue(5, 1, "A"),
                     ConsolidatedValue(5, 2, "A"),
                     ConsolidatedValue(5, 3, "A"),
                     ConsolidatedValue(5, 4, "A"),
                     ConsolidatedValue(5, 5, "A"),
-                    ConsolidatedValue(5, 6, "A")
+                    ConsolidatedValue(5, 6, "A"),
+                    ConsolidatedValue(5, 7, "B"),
+                    ConsolidatedValue(5, 8, "A")
                 ),
                 observations = listOf(
-                    ConsolidatedObservation(1, 1, "Necesita mejorar en la propuesta de soluciones"),
-                    ConsolidatedObservation(2, 4, "Excelente presentación y claridad")
+                    ConsolidatedObservation(1, 4, "Excelente dominio del tema y presentación muy clara"),
+                    ConsolidatedObservation(2, 1, "Necesita reforzar la fundamentación de propuestas"),
+                    ConsolidatedObservation(4, 1, "Requiere mayor dedicación y compromiso con las tareas")
                 )
             )
-
             consolidatedData = testData
             displayConsolidatedTable(testData)
-
-            Toast.makeText(this, "📊 Consolidado multinivel de prueba cargado", Toast.LENGTH_SHORT).show()
-
+            Toast.makeText(this, "📊 Datos de prueba cargados (3 sesiones)", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error cargando datos de prueba multinivel", e)
-            Toast.makeText(this, "❌ Error crítico en datos de prueba", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "❌ Error cargando datos de prueba", e)
+            Toast.makeText(this, "❌ Error crítico", Toast.LENGTH_LONG).show()
         }
     }
 
     private fun showLoading(show: Boolean) {
         progressBar.visibility = if (show) View.VISIBLE else View.GONE
+        btnExportExcel.isEnabled = !show
     }
 
     private fun getStudentName(studentId: Int): String {
         return consolidatedData?.students?.find { it.id == studentId }?.full_name ?: "Estudiante"
     }
+    private fun getAbilityName(abilityId: Int): String {
+        return consolidatedData?.abilities?.find { it.id == abilityId }?.display_name ?: "Capacidad"
+    }
 
     private fun getCriterionName(criterionId: Int): String {
         return consolidatedData?.criteria?.find { it.id == criterionId }?.display_name ?: "Criterio"
     }
-
-    private fun organizeDataBySession(data: ConsolidatedResponse): Map<ConsolidatedSession, List<CompetencyData>> {
-        val sessionMap = mutableMapOf<ConsolidatedSession, MutableList<CompetencyData>>()
-
-        data.sessions.forEach { session ->
-            val competenciesForSession = data.competencies.filter { it.session_id == session.id }
-            val competencyDataList = mutableListOf<CompetencyData>()
-
-            competenciesForSession.forEach { competency ->
-                val abilitiesForCompetency = data.abilities.filter { it.competency_id == competency.id }
-                val abilityDataList = mutableListOf<AbilityData>()
-
-                abilitiesForCompetency.forEach { ability ->
-                    val criteriaForAbility = data.criteria.filter { it.ability_id == ability.id }
-                    abilityDataList.add(AbilityData(ability, criteriaForAbility))
-                }
-
-                competencyDataList.add(CompetencyData(competency, abilityDataList))
-            }
-
-            sessionMap[session] = competencyDataList
-        }
-
-        return sessionMap
-    }
-
-    private fun calculateSessionColspan(competencies: List<CompetencyData>): Int {
-        return competencies.sumOf { calculateCompetencyColspan(it.abilities) }
-    }
-
-    private fun calculateCompetencyColspan(abilities: List<AbilityData>): Int {
-        return abilities.sumOf { ability ->
-            (ability.criteria.size * 2) + 1 // criterios + observaciones + PROM
-        } + 1 // + PROMEDIO final
-    }
-    private fun createConsolidatedCells(data: ConsolidatedResponse): List<List<ReportCellModel>> {
-        val cells = mutableListOf<List<ReportCellModel>>()
-
-        data.students.forEach { student ->
-            val studentCells = mutableListOf<ReportCellModel>()
-
-            // ✅ Organizar por sesión → competencia → capacidad → criterio
-            val sessionDataMap = organizeDataBySession(data)
-
-            sessionDataMap.forEach { (session, competencies) ->
-                competencies.forEach { competencyData ->
-                    competencyData.abilities.forEach { abilityData ->
-
-                        // ✅ Celdas de criterios + observaciones
-                        abilityData.criteria.forEach { criterion ->
-                            // Celda de criterio
-                            val gradeValue = data.values.find {
-                                it.student_id == student.id && it.criterion_id == criterion.id
-                            }?.value
-
-                            studentCells.add(
-                                ReportCellModel(
-                                    id = "cell_${student.id}_${criterion.id}",
-                                    studentId = student.id,
-                                    sessionId = session.id,
-                                    criterionId = criterion.id,
-                                    abilityId = abilityData.ability.id,
-                                    grade = gradeValue,
-                                    isEmpty = gradeValue.isNullOrEmpty()
-                                )
-                            )
-
-                            // ✅ Celda de observación
-                            val observationValue = data.observations.find {
-                                it.student_id == student.id && it.ability_id == abilityData.ability.id
-                            }?.observation
-
-                            studentCells.add(
-                                ReportCellModel(
-                                    id = "obs_${student.id}_${criterion.id}",
-                                    studentId = student.id,
-                                    sessionId = session.id,
-                                    criterionId = criterion.id,
-                                    abilityId = abilityData.ability.id,
-                                    observation = observationValue,
-                                    isObservation = true,
-                                    hasObservation = !observationValue.isNullOrEmpty()
-                                )
-                            )
-                        }
-
-                        // ✅ Celda PROM de capacidad (VACÍA y editable)
-                        studentCells.add(
-                            ReportCellModel(
-                                id = "prom_${student.id}_${abilityData.ability.id}",
-                                studentId = student.id,
-                                sessionId = session.id,
-                                abilityId = abilityData.ability.id,
-                                grade = null, // ✅ SIEMPRE VACÍO
-                                isPromedio = true,
-                                isEditable = true, // ✅ Permite edición
-                                isEmpty = true
-                            )
-                        )
-                    }
-                }
-            }
-
-            // ✅ Celda PROMEDIO final (VACÍA y editable)
-            studentCells.add(
-                ReportCellModel(
-                    id = "final_${student.id}",
-                    studentId = student.id,
-                    grade = null, // ✅ SIEMPRE VACÍO
-                    isPromedioFinal = true,
-                    isEditable = true, // ✅ Permite edición
-                    isEmpty = true
-                )
-            )
-
-            cells.add(studentCells)
-        }
-
-        return cells
-    }
-
 }

@@ -21,6 +21,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.launch
 import androidx.core.graphics.toColorInt
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class EvaluationActivity : AppCompatActivity(), ITableViewListener {
@@ -411,70 +412,89 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
             Toast.makeText(this, "No hay cambios para guardar", Toast.LENGTH_SHORT).show()
             return
         }
-
-        // ✅ Log detallado con fecha
-        Log.d(TAG, "💾 Iniciando guardado de ${pendingChanges.size} evaluaciones el ${getCurrentDateTime()}")
+        val keysToSave = pendingChanges.toList() // snapshot
+        Log.d(TAG, "💾 Guardando ${keysToSave.size} evaluaciones (snapshot) el ${getCurrentDateTime()}")
 
         showLoading(true)
         btnSaveAll.isEnabled = false
 
         lifecycleScope.launch {
-            try {
-                val context = evaluationContext ?: throw Exception("Contexto no disponible")
-                var savedCount = 0
-                var errorCount = 0
-
-                for (key in pendingChanges) {
-                    try {
-                        val (studentId, criterionId) = key.split("_").let {
-                            it[0].toInt() to it[1].toInt()
-                        }
-
-                        val ability = context.criteria.find { it.id == criterionId }?.ability_id
-                            ?: throw Exception("Ability no encontrada")
-
-                        val request = EvalValueRequest(
-                            session_id = sessionId,
-                            competency_id = competencyId,
-                            ability_id = ability,
-                            criterion_id = criterionId,
-                            product_id = productId,
-                            student_id = studentId,
-                            value = currentEvaluations[key],
-                            observation = currentObservations[key]
-                        )
-
-                        RetrofitClient.apiService.upsertEvaluation(request)
-                        savedCount++
-                        Log.d(TAG, "✅ Evaluación guardada: $key el ${getCurrentDateTime()}")
-
-                    } catch (e: Exception) {
-                        errorCount++
-                        Log.e(TAG, "❌ Error guardando evaluación: $key el ${getCurrentDateTime()}", e)
-                    }
-                }
-
-                val message = when {
-                    errorCount == 0 -> "✅ $savedCount evaluaciones guardadas el $currentDate"
-                    savedCount > 0 -> "⚠️ $savedCount guardadas, $errorCount con errores el $currentDate"
-                    else -> "❌ Error al guardar evaluaciones del $currentDate"
-                }
-
-                Toast.makeText(this@EvaluationActivity, message, Toast.LENGTH_LONG).show()
-
-                if (savedCount > 0) {
-                    pendingChanges.clear()
-                    updateSaveButton()
-                }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Error general guardando evaluaciones el ${getCurrentDateTime()}", e)
-                Toast.makeText(this@EvaluationActivity,
-                    "❌ Error: ${e.message}", Toast.LENGTH_LONG).show()
-            } finally {
+            val context = evaluationContext
+            if (context == null) {
+                Toast.makeText(this@EvaluationActivity, "Contexto no disponible", Toast.LENGTH_LONG).show()
                 showLoading(false)
                 btnSaveAll.isEnabled = true
+                return@launch
             }
+
+            val savedKeys = mutableListOf<String>()
+            val failedKeys = mutableListOf<String>()
+            var savedCount = 0
+            var errorCount = 0
+
+            for (key in keysToSave) {
+                if (!pendingChanges.contains(key)) {
+                    Log.d(TAG, "🔁 Key $key ya no está pendiente, se omite.")
+                    continue
+                }
+
+                val parts = key.split("_")
+                if (parts.size < 2) {
+                    Log.e(TAG, "Clave inválida: $key")
+                    failedKeys.add(key)
+                    errorCount++
+                    continue
+                }
+
+                val studentId = parts[0].toIntOrNull()
+                val criterionId = parts[1].toIntOrNull()
+                if (studentId == null || criterionId == null) {
+                    Log.e(TAG, "Clave con formato incorrecto: $key")
+                    failedKeys.add(key)
+                    errorCount++
+                    continue
+                }
+
+                try {
+                    val abilityId = context.criteria.find { it.id == criterionId }?.ability_id
+                        ?: throw Exception("Ability no encontrada para criterion $criterionId")
+
+                    val request = EvalValueRequest(
+                        session_id = sessionId,
+                        competency_id = competencyId,
+                        ability_id = abilityId,
+                        criterion_id = criterionId,
+                        product_id = productId,
+                        student_id = studentId,
+                        value = currentEvaluations[key],
+                        observation = currentObservations[key]
+                    )
+                    withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        RetrofitClient.apiService.upsertEvaluation(request)
+                    }
+
+                    savedCount++
+                    savedKeys.add(key)
+                    Log.d(TAG, "✅ Evaluación guardada: $key el ${getCurrentDateTime()}")
+
+                } catch (e: Exception) {
+                    errorCount++
+                    failedKeys.add(key)
+                    Log.e(TAG, "❌ Error guardando evaluación $key el ${getCurrentDateTime()}", e)
+                }
+            }
+
+            pendingChanges.removeAll(savedKeys)
+            val message = when {
+                errorCount == 0 -> "✅ $savedCount evaluaciones guardadas el $currentDate"
+                savedCount > 0 -> "⚠️ $savedCount guardadas, $errorCount con errores (se mantienen para reintento)"
+                else -> "❌ Error al guardar evaluaciones del $currentDate"
+            }
+
+            Toast.makeText(this@EvaluationActivity, message, Toast.LENGTH_LONG).show()
+            updateSaveButton()
+            showLoading(false)
+            btnSaveAll.isEnabled = true
         }
     }
 

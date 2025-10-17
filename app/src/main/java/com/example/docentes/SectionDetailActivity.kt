@@ -126,7 +126,7 @@ class SectionDetailActivity : AppCompatActivity() {
 
         val intent = Intent(this, ReportsActivity::class.java).apply {
             putExtra("SECTION_ID", sectionId)
-            putExtra("COMPETENCY_ID", -1) // Se puede omitir o usar -1 para mostrar todas
+            putExtra("COMPETENCY_ID", -1)
             putExtra("SECTION_NAME", sectionName)
             putExtra("BIMESTER_NAME", bimesterName)
         }

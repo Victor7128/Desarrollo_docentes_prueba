@@ -41,6 +41,9 @@ android {
 }
 
 dependencies {
+    // Para manejo de archivos
+    implementation(libs.androidx.documentfile)
+
     //Tablas
     implementation(libs.tableView)
 

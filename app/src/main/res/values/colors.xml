@@ -38,4 +38,10 @@
     <color name="grade_b_text">#EF6C00</color>
     <color name="grade_c_bg">#FFCDD2</color>
     <color name="grade_c_text">#C62828</color>
+
+    <!-- ⭐ NUEVOS COLORES DE TEXTO (Agregar estos) -->
+    <color name="text_primary">#333333</color>
+    <color name="text_secondary">#666666</color>
+    <color name="text_hint">#999999</color>
+    <color name="text_disabled">#CCCCCC</color>
 </resources>
