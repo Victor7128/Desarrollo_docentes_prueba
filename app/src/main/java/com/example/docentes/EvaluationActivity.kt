@@ -443,7 +443,7 @@ class EvaluationActivity : AppCompatActivity(), ITableViewListener {
                     Log.e(TAG, "Clave inválida: $key")
                     failedKeys.add(key)
                     errorCount++
-                    continue
+                    continue 
                 }
 
                 val studentId = parts[0].toIntOrNull()

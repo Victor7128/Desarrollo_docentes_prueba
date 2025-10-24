@@ -41,6 +41,9 @@ android {
 }
 
 dependencies {
+    // ZXing para generar QR
+    implementation(libs.core)
+
     // Para manejo de archivos
     implementation(libs.androidx.documentfile)
 

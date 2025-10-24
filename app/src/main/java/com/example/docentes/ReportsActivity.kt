@@ -1,9 +1,15 @@
 package com.example.docentes
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
+import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.view.View
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -17,10 +23,17 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.docentes.adapters.ReportStudentAdapter
 import com.example.docentes.models.*
 import com.example.docentes.network.RetrofitClient
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import androidx.core.graphics.set
+import androidx.core.graphics.createBitmap
+import androidx.core.net.toUri
+import org.json.JSONObject
 
 class ReportsActivity : AppCompatActivity() {
 
@@ -35,6 +48,11 @@ class ReportsActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var rvStudents: RecyclerView
     private lateinit var studentAdapter: ReportStudentAdapter
+
+    private lateinit var btnGenerateQR: MaterialButton
+    private lateinit var qrBottomSheet: BottomSheetDialog
+    private lateinit var ivQRCode: ImageView
+    private lateinit var btnShareQR: MaterialButton
 
     private var sectionId: Int = -1
     private var competencyId: Int = -1
@@ -52,6 +70,202 @@ class ReportsActivity : AppCompatActivity() {
         setupButtons()
         setupSwipeRefresh()
         loadReportsData()
+        setupQRViews()
+        setupQRButton()
+    }
+
+    private fun setupQRViews() {
+        btnGenerateQR = findViewById(R.id.btnGenerateQR)
+
+        // Configurar Bottom Sheet
+        val bottomSheetView = layoutInflater.inflate(R.layout.bottom_sheet_qr, null)
+        val btnPreview = bottomSheetView.findViewById<MaterialButton>(R.id.btnPreview)
+        btnPreview.setOnClickListener {
+            handleQRClick()
+        }
+        ivQRCode = bottomSheetView.findViewById(R.id.ivQRCode)
+        btnShareQR = bottomSheetView.findViewById(R.id.btnShare)
+
+        qrBottomSheet = BottomSheetDialog(this).apply {
+            setContentView(bottomSheetView)
+        }
+
+        // Configurar compartir
+        btnShareQR.setOnClickListener {
+            shareQRCode()
+        }
+    }
+
+    private fun setupQRButton() {
+        btnGenerateQR.setOnClickListener {
+            lifecycleScope.launch {
+                try {
+                    showLoading(true)
+
+                    // 1. Primero generamos y guardamos el HTML
+                    val fileName = "consolidado_${sectionName.replace(" ", "_")}_${System.currentTimeMillis()}.html"
+                    val success = generatePdfReport(fileName)
+
+                    if (!success) {
+                        Toast.makeText(this@ReportsActivity,
+                            "Error generando el reporte",
+                            Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+
+                    // 2. Obtenemos la URI del archivo local
+                    val file = File(getExternalFilesDir(null), fileName)
+                    val fileUri = androidx.core.content.FileProvider.getUriForFile(
+                        this@ReportsActivity,
+                        "${packageName}.provider",
+                        file
+                    )
+
+                    // 3. Creamos los datos del QR con la URI local
+                    val qrData = QRData(
+                        sectionId = sectionId,
+                        fileName = fileName,
+                        fileUri = fileUri.toString(),
+                        timestamp = System.currentTimeMillis(),
+                        expiresAt = System.currentTimeMillis() + (3600 * 1000),
+                        sectionName = sectionName
+                    )
+
+                    // 4. Generamos el QR
+                    val qrBitmap = generateQRCode(qrData.toJson())
+                    ivQRCode.setImageBitmap(qrBitmap)
+
+                    // Guardamos la data para poder acceder al archivo después
+                    ivQRCode.tag = qrData.toJson()
+
+                    // 5. Mostramos el Bottom Sheet con instrucciones actualizadas
+                    qrBottomSheet.show()
+
+                    // 6. Mostrar instrucciones al usuario
+                    Toast.makeText(this@ReportsActivity,
+                        "✅ QR generado.\nAl escanear se abrirá el reporte HTML guardado en tu dispositivo",
+                        Toast.LENGTH_LONG).show()
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error generando QR", e)
+                    Toast.makeText(this@ReportsActivity,
+                        "Error generando QR: ${e.message}",
+                        Toast.LENGTH_SHORT).show()
+                } finally {
+                    showLoading(false)
+                }
+            }
+        }
+    }
+
+    private fun generateQRCode(content: String): Bitmap {
+        val writer = QRCodeWriter()
+        try {
+            val bitMatrix = writer.encode(
+                content,
+                BarcodeFormat.QR_CODE,
+                512,
+                512
+            )
+            val width = bitMatrix.width
+            val height = bitMatrix.height
+            val bitmap = createBitmap(width, height, Bitmap.Config.RGB_565)
+
+            for (x in 0 until width) {
+                for (y in 0 until height) {
+                    bitmap[x, y] = if (bitMatrix[x, y]) Color.BLACK else Color.WHITE
+                }
+            }
+            return bitmap
+        } catch (e: Exception) {
+            Log.e(TAG, "Error generando QR", e)
+            throw e
+        }
+    }
+
+    private fun shareQRCode() {
+        // Guardar QR temporalmente
+        val qrBitmap = (ivQRCode.drawable as BitmapDrawable).bitmap
+        val path = MediaStore.Images.Media.insertImage(
+            contentResolver,
+            qrBitmap,
+            "Consolidado_${sectionName}_QR",
+            "Código QR para consolidado de $sectionName"
+        )
+
+        val uri = path.toUri()
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/*"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "Consolidado de $sectionName")
+            putExtra(Intent.EXTRA_TEXT, "Escanea este código QR para ver el consolidado de notas")
+        }
+
+        startActivity(Intent.createChooser(intent, "Compartir código QR"))
+    }
+
+    data class QRData(
+        val sectionId: Int,
+        val fileName: String,
+        val fileUri: String,
+        val timestamp: Long,
+        val expiresAt: Long,
+        val sectionName: String
+    ) {
+        fun toJson(): String = JSONObject().apply {
+            put("sectionId", sectionId)
+            put("fileName", fileName)
+            put("fileUri", fileUri)
+            put("timestamp", timestamp)
+            put("expiresAt", expiresAt)
+            put("sectionName", sectionName)
+            // Quitamos la URL base y usamos directamente el fileUri local
+        }.toString()
+    }
+
+    private fun handleQRClick() {
+        val currentQRData = try {
+            val jsonStr = (ivQRCode.tag as? String) ?: return
+            // Parsear el JSON a QRData
+            JSONObject(jsonStr).let { json ->
+                QRData(
+                    sectionId = json.getInt("sectionId"),
+                    fileName = json.getString("fileName"),
+                    fileUri = json.getString("fileUri"),
+                    timestamp = json.getLong("timestamp"),
+                    expiresAt = json.getLong("expiresAt"),
+                    sectionName = json.getString("sectionName")
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing QR data", e)
+            return
+        }
+
+        // Abrir el archivo HTML
+        try {
+            val file = File(getExternalFilesDir(null), currentQRData.fileName)
+            if (!file.exists()) {
+                Toast.makeText(this, "Archivo no encontrado", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "${packageName}.provider",
+                file
+            )
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "text/html")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            startActivity(Intent.createChooser(intent, "Abrir reporte"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening HTML file", e)
+            Toast.makeText(this, "Error abriendo el archivo", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun initViews() {
@@ -142,7 +356,6 @@ class ReportsActivity : AppCompatActivity() {
         val abilitiesByCompetency = data.abilities.groupBy { it.competency_id }
         val criteriaByAbility = data.criteria.groupBy { it.ability_id }
 
-        // ⭐ AHORA PASAMOS LAS SESIONES AL ADAPTER
         studentAdapter = ReportStudentAdapter(
             students = data.students,
             sessions = data.sessions,
