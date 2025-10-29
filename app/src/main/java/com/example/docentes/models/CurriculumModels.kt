@@ -2,7 +2,8 @@ package com.example.docentes.models
 
 data class Area(
     val id: Int,
-    val nombre: String
+    val nombre: String,
+    val description: String? = null
 )
 
 data class CompetenciaTemplate(

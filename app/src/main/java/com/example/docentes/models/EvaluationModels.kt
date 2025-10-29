@@ -92,7 +92,7 @@ data class ConsolidatedSectionResponse(
 )
 
 // ✅ Respuesta genérica de API
-data class ApiResponse<T>(
+data class EvaluationApiResponse<T>(
     val data: T,
     val message: String? = null,
     val status: String? = null

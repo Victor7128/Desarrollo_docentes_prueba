@@ -129,27 +129,6 @@ class CompetenciesActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupAreaSpinner() {
-        val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
-        val spinnerAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            areasWithAll.map { it.nombre }
-        )
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerAreas.adapter = spinnerAdapter
-
-        spinnerAreas.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedArea = areasWithAll[position]
-                Log.d(TAG, "Área seleccionada: ${selectedArea.nombre}")
-                loadCompetenciasByArea(if (selectedArea.id == 0) null else selectedArea.id)
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-    }
-
     private fun loadAllCompetencias() {
         lifecycleScope.launch {
             try {
@@ -279,6 +258,27 @@ class CompetenciesActivity : AppCompatActivity() {
             } finally {
                 progressBar.visibility = View.GONE
             }
+        }
+    }
+
+    private fun setupAreaSpinner() {
+        val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
+        val spinnerAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            areasWithAll.map { it.nombre }
+        )
+        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerAreas.adapter = spinnerAdapter
+
+        spinnerAreas.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selectedArea = areasWithAll[position]
+                Log.d(TAG, "Área seleccionada: ${selectedArea.nombre}")
+                loadCompetenciasByArea(if (selectedArea.id == 0) null else selectedArea.id)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 }

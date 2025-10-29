@@ -239,4 +239,28 @@ interface ApiService {
      */
     @GET("sections/{section_id}/consolidado")
     suspend fun getConsolidatedReport(@Path("section_id") sectionId: Int): ConsolidatedResponse
+
+    // ============================================
+    // AUTENTICACIÓN
+    // ============================================
+
+    @POST("api/auth/register/alumno")
+    suspend fun registerAlumno(
+        @Body request: RegisterAlumnoRequest
+    ): Response<ApiResponse<UserResponse>>
+
+    @POST("api/auth/register/apoderado")
+    suspend fun registerApoderado(
+        @Body request: RegisterApoderadoRequest
+    ): Response<ApiResponse<UserResponse>>
+
+    @POST("api/auth/register/docente")
+    suspend fun registerDocente(
+        @Body request: RegisterDocenteRequest
+    ): Response<ApiResponse<UserResponse>>
+
+    @GET("api/auth/me")
+    suspend fun getCurrentUser(
+        @Header("X-Firebase-UID") firebaseUid: String
+    ): Response<ApiResponse<UserResponse>>
 }

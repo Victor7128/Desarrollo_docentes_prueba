@@ -4,8 +4,9 @@
     <!-- Permisos necesarios -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> <!-- Permisos para leer archivos (Android 12 y menores) -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28"/>
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <application
@@ -18,6 +19,27 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Docentes"
         tools:targetApi="31">
+        <activity
+            android:name=".RegisterDocenteActivity"
+            android:exported="false" />
+        <activity
+            android:name=".RegisterApoderadoActivity"
+            android:exported="false" />
+        <activity
+            android:name=".RegisterAlumnoActivity"
+            android:exported="false" />
+        <activity
+            android:name=".SelectRegisterTypeActivity"
+            android:exported="false" />
+        <activity
+            android:name=".LoginActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <activity
             android:name=".ReportsActivity"
             android:exported="false" />
@@ -46,13 +68,7 @@
             android:parentActivityName=".MainActivity" />
         <activity
             android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity> <!-- FileProvider para compartir archivos -->
+            android:exported="false" /> <!-- FileProvider para compartir archivos -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

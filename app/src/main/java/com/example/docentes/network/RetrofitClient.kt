@@ -9,7 +9,8 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    private const val BASE_URL = "https://backend-web-mom-qwh2.shuttle.app/"
+    //private const val BASE_URL = "https://backend-web-mom-qwh2.shuttle.app/"
+    private const val BASE_URL = "https://backdocentes2-zezw.shuttle.app/"
     private const val CURRICULUM_BASE_URL = "https://apiteacher-wai4.shuttle.app/"
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {

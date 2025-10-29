@@ -1,5 +1,8 @@
 [versions]
 agp = "8.11.2"
+firebaseBom = "33.7.0"  # ✅ Versión más reciente y estable
+firebaseUiAuth = "8.0.2"
+playServicesAuth = "21.4.0"
 core = "3.5.3"
 documentfile = "1.1.0"
 kotlin = "2.0.21"
@@ -20,6 +23,9 @@ viewbinding = "8.13.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+firebase-ui-auth = { module = "com.firebaseui:firebase-ui-auth", version.ref = "firebaseUiAuth" }
+play-services-auth = { module = "com.google.android.gms:play-services-auth", version.ref = "playServicesAuth" }
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentfile" }
 androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
 androidx-swiperefreshlayout = { module = "androidx.swiperefreshlayout:swiperefreshlayout", version.ref = "swiperefreshlayout" }
