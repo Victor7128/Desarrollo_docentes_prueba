@@ -8,6 +8,8 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import com.example.docentes.network.RetrofitClient
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
@@ -20,6 +22,9 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class LoginActivity : AppCompatActivity() {
     companion object {
@@ -150,7 +155,6 @@ class LoginActivity : AppCompatActivity() {
         if (requestCode == RC_SIGN_IN) {
             val task: Task<GoogleSignInAccount> = GoogleSignIn.getSignedInAccountFromIntent(data)
             try {
-                // ✅ CORREGIDO: Usar task.result en lugar de getResult()
                 val account = task.result
                 Log.d(TAG, "firebaseAuthWithGoogle: ${account.id}")
                 firebaseAuthWithGoogle(account.idToken!!)
@@ -192,13 +196,148 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun verifyUserAndRedirect(token: String?) {
-        // TODO: Llamar a tu backend Rust para verificar el token y obtener el rol
-        // Por ahora, redirigimos directamente a MainActivity
+        if (token == null) {
+            Toast.makeText(this, "Error: No se pudo obtener el token", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        val intent = Intent(this, MainActivity::class.java)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        startActivity(intent)
-        finish()
+        showLoading(true)
+
+        lifecycleScope.launch {
+            try {
+                val user = auth.currentUser
+                if (user == null) {
+                    withContext(Dispatchers.Main) {
+                        showLoading(false)
+                        Toast.makeText(
+                            this@LoginActivity,
+                            "Error: Usuario no autenticado",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    return@launch
+                }
+
+                // Llamar al endpoint /api/auth/me
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.getCurrentUser(user.uid)
+                }
+
+                withContext(Dispatchers.Main) {
+                    showLoading(false)
+
+                    if (response.isSuccessful) {
+                        val body = response.body()
+                        if (body != null && body.success && body.data != null) {
+                            val userResponse = body.data
+
+                            Log.d(TAG, "Usuario verificado - Rol: ${userResponse.role}, Status: ${userResponse.status}")
+
+                            // Verificar que el rol sea DOCENTE
+                            if (userResponse.role == "DOCENTE") {
+                                // Verificar que la cuenta esté activa
+                                if (userResponse.status == "ACTIVE") {
+                                    // Guardar datos del usuario en SharedPreferences
+                                    saveUserData(userResponse)
+
+                                    // Redirigir a MainActivity
+                                    val intent = Intent(this@LoginActivity, MainActivity::class.java)
+                                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                    startActivity(intent)
+                                    finish()
+                                } else {
+                                    // Cuenta no activa
+                                    Toast.makeText(
+                                        this@LoginActivity,
+                                        "Tu cuenta está ${userResponse.status}. Contacta al administrador.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+
+                                    // Cerrar sesión
+                                    auth.signOut()
+                                    googleSignInClient.signOut()
+                                }
+                            } else {
+                                // El usuario no es docente
+                                Toast.makeText(
+                                    this@LoginActivity,
+                                    "Esta aplicación es solo para docentes. Tu rol es: ${userResponse.role}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+
+                                // Cerrar sesión
+                                auth.signOut()
+                                googleSignInClient.signOut()
+                            }
+                        } else {
+                            Toast.makeText(
+                                this@LoginActivity,
+                                "Error: ${body?.message ?: "Respuesta inválida"}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    } else {
+                        when (response.code()) {
+                            401 -> {
+                                Toast.makeText(
+                                    this@LoginActivity,
+                                    "No autorizado. Por favor inicia sesión nuevamente.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                auth.signOut()
+                                googleSignInClient.signOut()
+                            }
+                            404 -> {
+                                Toast.makeText(
+                                    this@LoginActivity,
+                                    "Usuario no encontrado en el sistema",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            else -> {
+                                val errorBody = response.errorBody()?.string()
+                                Toast.makeText(
+                                    this@LoginActivity,
+                                    "Error ${response.code()}: $errorBody",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    showLoading(false)
+                    Log.e(TAG, "Error verificando usuario", e)
+                    Toast.makeText(
+                        this@LoginActivity,
+                        "Error de conexión: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    private fun saveUserData(userResponse: com.example.docentes.models.UserResponse) {
+        val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        val editor = sharedPreferences.edit()
+
+        editor.putInt("user_id", userResponse.id)
+        editor.putString("user_email", userResponse.email)
+        editor.putString("user_role", userResponse.role)
+        editor.putString("user_status", userResponse.status)
+
+        // Guardar datos del perfil
+        val profileData = userResponse.profileData
+        editor.putString("user_full_name", profileData["full_name"] as? String)
+        editor.putInt("user_area_id", (profileData["area_id"] as? Double)?.toInt() ?: 0)
+        editor.putString("user_employee_code", profileData["employee_code"] as? String)
+
+        editor.apply()
+
+        Log.d(TAG, "Datos del usuario guardados en SharedPreferences")
     }
 
     private fun showLoading(show: Boolean) {
@@ -209,12 +348,21 @@ class LoginActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Check if user is signed in
+
+        // ✅ CORREGIDO: Verificar usuario con el backend antes de redirigir
         val currentUser = auth.currentUser
         if (currentUser != null) {
-            // Usuario ya autenticado, redirigir
-            startActivity(Intent(this, MainActivity::class.java))
-            finish()
+            Log.d(TAG, "Usuario ya autenticado, verificando con backend...")
+
+            currentUser.getIdToken(true).addOnSuccessListener { result ->
+                val token = result.token
+                verifyUserAndRedirect(token)
+            }.addOnFailureListener { e ->
+                Log.e(TAG, "Error obteniendo token en onStart", e)
+                // Si hay error obteniendo el token, cerrar sesión
+                auth.signOut()
+                googleSignInClient.signOut()
+            }
         }
     }
 }

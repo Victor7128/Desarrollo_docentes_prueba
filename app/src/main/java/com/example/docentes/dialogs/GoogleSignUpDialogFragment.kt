@@ -1,0 +1,230 @@
+package com.example.docentes.dialogs
+
+import android.app.Dialog
+import android.os.Bundle
+import android.util.Log
+import android.view.LayoutInflater
+import android.view.View
+import android.widget.*
+import androidx.appcompat.app.AlertDialog
+import androidx.fragment.app.DialogFragment
+import androidx.lifecycle.lifecycleScope
+import com.example.docentes.R
+import com.example.docentes.models.ReniecData
+import com.example.docentes.models.ReniecRequest
+import com.example.docentes.network.ReniecClient
+import com.example.docentes.network.RetrofitClient
+import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class GoogleSignUpDialogFragment : DialogFragment() {
+
+    companion object {
+        private const val TAG = "GoogleSignUpDialog"
+        private const val ARG_EMAIL = "email"
+        private const val ARG_NAME = "name"
+
+        fun newInstance(email: String, displayName: String): GoogleSignUpDialogFragment {
+            return GoogleSignUpDialogFragment().apply {
+                arguments = Bundle().apply {
+                    putString(ARG_EMAIL, email)
+                    putString(ARG_NAME, displayName)
+                }
+            }
+        }
+    }
+
+    interface GoogleSignUpListener {
+        fun onGoogleSignUpComplete(dni: String, fullName: String, areaId: Int, areaName: String)
+        fun onGoogleSignUpCancelled()
+    }
+
+    private lateinit var etDNI: TextInputEditText
+    private lateinit var etFullName: TextInputEditText
+    private lateinit var actvArea: AutoCompleteTextView
+    private lateinit var btnValidate: Button
+    private lateinit var btnComplete: Button
+    private lateinit var llValidating: LinearLayout
+    private lateinit var llValidationStatus: LinearLayout
+    private lateinit var ivStatusIcon: ImageView
+    private lateinit var tvReniecStatus: TextView
+
+    private var reniecData: ReniecData? = null
+    private var selectedAreaId: Int? = null
+    private var areasMap: Map<String, Int> = emptyMap() // ✅ Mapear nombre → ID
+
+    private var listener: GoogleSignUpListener? = null
+
+    private val userEmail: String by lazy { arguments?.getString(ARG_EMAIL) ?: "" }
+    private val userName: String by lazy { arguments?.getString(ARG_NAME) ?: "" }
+
+    fun setListener(listener: GoogleSignUpListener) {
+        this.listener = listener
+    }
+
+    override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
+        val view = LayoutInflater.from(context).inflate(R.layout.dialog_google_signup, null)
+
+        initViews(view)
+        loadAreas()
+        setupListeners()
+
+        // Pre-llenar nombre desde Google
+        etFullName.setText(userName)
+
+        return AlertDialog.Builder(requireContext())
+            .setView(view)
+            .setCancelable(false)
+            .create()
+    }
+
+    private fun initViews(view: View) {
+        etDNI = view.findViewById(R.id.etDNI)
+        etFullName = view.findViewById(R.id.etFullName)
+        actvArea = view.findViewById(R.id.actvArea)
+        btnValidate = view.findViewById(R.id.btnValidate)
+        btnComplete = view.findViewById(R.id.btnComplete)
+        llValidating = view.findViewById(R.id.llValidating)
+        llValidationStatus = view.findViewById(R.id.llValidationStatus)
+        ivStatusIcon = view.findViewById(R.id.ivStatusIcon)
+        tvReniecStatus = view.findViewById(R.id.tvReniecStatus)
+
+        // Botón cancelar
+        view.findViewById<Button>(R.id.btnCancel).setOnClickListener {
+            listener?.onGoogleSignUpCancelled()
+            dismiss()
+        }
+    }
+
+    private fun loadAreas() {
+        lifecycleScope.launch {
+            try {
+                val areas = withContext(Dispatchers.IO) {
+                    RetrofitClient.curriculumApiService.getAreas()
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (areas.isNotEmpty()) {
+                        val areaNames = areas.map { it.nombre }.toTypedArray()
+                        val adapter = ArrayAdapter(
+                            requireContext(),
+                            android.R.layout.simple_dropdown_item_1line,
+                            areaNames
+                        )
+                        actvArea.setAdapter(adapter)
+
+                        actvArea.setOnItemClickListener { _, _, position, _ ->
+                            selectedAreaId = areas[position].id
+                            Log.d(TAG, "✅ Área seleccionada: ${areas[position].nombre} (ID: ${areas[position].id})")
+                        }
+                    } else {
+                        Log.e(TAG, "❌ No hay áreas disponibles")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error cargando áreas", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Error cargando áreas: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun setupListeners() {
+        btnValidate.setOnClickListener {
+            val dni = etDNI.text.toString().trim()
+            if (dni.length == 8) {
+                validateDNI(dni)
+            } else {
+                Toast.makeText(context, "Ingresa un DNI válido de 8 dígitos", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnComplete.setOnClickListener {
+            completeSignUp()
+        }
+    }
+
+    private fun validateDNI(dni: String) {
+        llValidating.visibility = View.VISIBLE
+        llValidationStatus.visibility = View.GONE
+        btnValidate.isEnabled = false
+        etDNI.isEnabled = false
+
+        lifecycleScope.launch {
+            try {
+                val request = ReniecRequest(dni = dni)
+                val response = ReniecClient.apiService.validateDNI(
+                    token = ReniecClient.getToken(),
+                    request = request
+                )
+
+                withContext(Dispatchers.Main) {
+                    llValidating.visibility = View.GONE
+                    llValidationStatus.visibility = View.VISIBLE
+                    btnValidate.isEnabled = true
+                    etDNI.isEnabled = true
+
+                    if (response.isSuccessful && response.body()?.success == true) {
+                        val data = response.body()!!.data!!
+                        reniecData = data
+
+                        etFullName.setText(data.nombreCompleto)
+                        etFullName.isEnabled = false
+
+                        ivStatusIcon.setImageResource(android.R.drawable.presence_online)
+                        ivStatusIcon.setColorFilter(requireContext().getColor(android.R.color.holo_green_dark))
+                        tvReniecStatus.text = "✅ DNI validado correctamente"
+                        tvReniecStatus.setTextColor(requireContext().getColor(android.R.color.holo_green_dark))
+
+                        btnComplete.isEnabled = true
+                    } else {
+                        showError("DNI no encontrado en RENIEC")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    llValidating.visibility = View.GONE
+                    llValidationStatus.visibility = View.VISIBLE
+                    btnValidate.isEnabled = true
+                    etDNI.isEnabled = true
+                    showError("Error de conexión: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun showError(message: String) {
+        ivStatusIcon.setImageResource(android.R.drawable.presence_busy)
+        ivStatusIcon.setColorFilter(requireContext().getColor(android.R.color.holo_red_dark))
+        tvReniecStatus.text = "❌ $message"
+        tvReniecStatus.setTextColor(requireContext().getColor(android.R.color.holo_red_dark))
+        btnComplete.isEnabled = false
+    }
+
+    private fun completeSignUp() {
+        val dni = etDNI.text.toString().trim()
+        val fullName = etFullName.text.toString().trim()
+        val areaName = actvArea.text.toString().trim()
+
+        if (dni.isEmpty() || reniecData == null) {
+            Toast.makeText(context, "Valida tu DNI primero", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (areaName.isEmpty() || selectedAreaId == null) {
+            Toast.makeText(context, "Selecciona tu área", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Log.d(TAG, "✅ Completando registro:")
+        Log.d(TAG, "  - DNI: $dni")
+        Log.d(TAG, "  - Nombre: $fullName")
+        Log.d(TAG, "  - Área: $areaName (ID: $selectedAreaId)")
+
+        listener?.onGoogleSignUpComplete(dni, fullName, selectedAreaId!!, areaName)
+        dismiss()
+    }
+}
