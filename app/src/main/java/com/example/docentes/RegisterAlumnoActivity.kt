@@ -7,23 +7,15 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.example.docentes.models.ApiResponse
 import com.example.docentes.models.ErrorResponse
 import com.example.docentes.models.RegisterAlumnoRequest
 import com.example.docentes.models.ReniecData
 import com.example.docentes.models.ReniecRequest
 import com.example.docentes.network.ReniecClient
 import com.example.docentes.network.RetrofitClient
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInClient
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.tasks.Task
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.Dispatchers
@@ -34,11 +26,9 @@ class RegisterAlumnoActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "RegisterAlumnoActivity"
-        private const val RC_SIGN_IN = 9003
     }
 
     private lateinit var auth: FirebaseAuth
-    private lateinit var googleSignInClient: GoogleSignInClient
 
     private lateinit var etDNI: TextInputEditText
     private lateinit var etFullName: TextInputEditText
@@ -60,14 +50,6 @@ class RegisterAlumnoActivity : AppCompatActivity() {
 
         // Initialize Firebase Auth
         auth = Firebase.auth
-
-        // Configure Google Sign In
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(getString(R.string.default_web_client_id))
-            .requestEmail()
-            .build()
-
-        googleSignInClient = GoogleSignIn.getClient(this, gso)
 
         initViews()
         setupListeners()
@@ -201,20 +183,38 @@ class RegisterAlumnoActivity : AppCompatActivity() {
             .addOnCompleteListener(this) { task ->
                 if (task.isSuccessful) {
                     val user = auth.currentUser
+
+                    // Enviar verificación de correo
+                    user?.sendEmailVerification()?.addOnCompleteListener { verificationTask ->
+                        if (verificationTask.isSuccessful) {
+                            Log.d(TAG, "Correo de verificación enviado")
+                        } else {
+                            Log.w(TAG, "Error enviando verificación: ${verificationTask.exception}")
+                        }
+                    }
+
                     user?.getIdToken(true)?.addOnSuccessListener { result ->
                         val token = result.token
-                        registerUserInBackend(token, email, dni)
+                        if (token != null) {
+                            registerUserInBackend(token, email, dni)
+                        } else {
+                            showLoading(false)
+                            Toast.makeText(this, "Error: No se pudo obtener el token de autenticación", Toast.LENGTH_SHORT).show()
+                        }
+                    }?.addOnFailureListener { exception ->
+                        showLoading(false)
+                        Toast.makeText(this, "Error obteniendo token: ${exception.message}", Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     showLoading(false)
-                    Toast.makeText(this, "Error: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Error en registro: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
                 }
             }
     }
 
     private fun validateInput(email: String, password: String, passwordConfirm: String, dni: String): Boolean {
         if (dni.length != 8) {
-            Toast.makeText(this, "Ingresa un DNI válido", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Ingresa un DNI válido de 8 dígitos", Toast.LENGTH_SHORT).show()
             return false
         }
 
@@ -224,12 +224,12 @@ class RegisterAlumnoActivity : AppCompatActivity() {
         }
 
         if (email.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-            etEmail.error = "Correo inválido"
+            etEmail.error = "Correo electrónico inválido"
             return false
         }
 
         if (password.isEmpty() || password.length < 6) {
-            etPassword.error = "Mínimo 6 caracteres"
+            etPassword.error = "La contraseña debe tener mínimo 6 caracteres"
             return false
         }
 
@@ -241,48 +241,7 @@ class RegisterAlumnoActivity : AppCompatActivity() {
         return true
     }
 
-    private fun signUpWithGoogle() {
-        val signInIntent = googleSignInClient.signInIntent
-        startActivityForResult(signInIntent, RC_SIGN_IN)
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-
-        if (requestCode == RC_SIGN_IN) {
-            val task: Task<GoogleSignInAccount> = GoogleSignIn.getSignedInAccountFromIntent(data)
-            try {
-                val account = task.result
-                firebaseAuthWithGoogle(account.idToken!!)
-            } catch (e: ApiException) {
-                Log.w(TAG, "Google sign in failed", e)
-                Toast.makeText(this, "Error con Google: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun firebaseAuthWithGoogle(idToken: String) {
-        showLoading(true)
-
-        val credential = GoogleAuthProvider.getCredential(idToken, null)
-        auth.signInWithCredential(credential)
-            .addOnCompleteListener(this) { task ->
-                if (task.isSuccessful) {
-                    val user = auth.currentUser
-                    user?.getIdToken(true)?.addOnSuccessListener { result ->
-                        val token = result.token
-                        val dni = etDNI.text.toString().trim()
-                        registerUserInBackend(token, user.email ?: "", dni)
-                    }
-                } else {
-                    showLoading(false)
-                    Toast.makeText(this, "Autenticación fallida", Toast.LENGTH_SHORT).show()
-                }
-            }
-    }
-
-    private fun registerUserInBackend(token: String?, email: String, dni: String) {
+    private fun registerUserInBackend(token: String, email: String, dni: String) {
         showLoading(true)
 
         lifecycleScope.launch {
@@ -318,7 +277,7 @@ class RegisterAlumnoActivity : AppCompatActivity() {
                         if (body != null && body.success) {
                             val userData = body.data
 
-                            Log.d(TAG, "Usuario registrado: ${userData?.email}, Rol: ${userData?.role}")
+                            Log.d(TAG, "Alumno registrado: ${userData?.email}, Rol: ${userData?.role}")
 
                             Toast.makeText(
                                 this@RegisterAlumnoActivity,
@@ -326,8 +285,8 @@ class RegisterAlumnoActivity : AppCompatActivity() {
                                 Toast.LENGTH_LONG
                             ).show()
 
-                            // Redirigir a MainActivity
-                            val intent = Intent(this@RegisterAlumnoActivity, MainActivity::class.java)
+                            // Redirigir a DashboardAlumnosActivity
+                            val intent = Intent(this@RegisterAlumnoActivity, DashboardAlumnosActivity::class.java)
                             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                             startActivity(intent)
                             finish()
@@ -355,7 +314,7 @@ class RegisterAlumnoActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     showLoading(false)
-                    Log.e(TAG, "Error registrando usuario", e)
+                    Log.e(TAG, "Error registrando alumno", e)
                     Toast.makeText(
                         this@RegisterAlumnoActivity,
                         "Error de conexión: ${e.message}",

@@ -20,6 +20,12 @@
         android:theme="@style/Theme.Docentes"
         tools:targetApi="31">
         <activity
+            android:name=".DashboardAlumnosActivity"
+            android:exported="false" />
+        <activity
+            android:name=".DashboardApoderadoActivity"
+            android:exported="false" />
+        <activity
             android:name=".RegisterDocenteActivity"
             android:exported="false" />
         <activity

@@ -13,16 +13,9 @@ import com.example.docentes.models.ReniecData
 import com.example.docentes.models.ReniecRequest
 import com.example.docentes.network.ReniecClient
 import com.example.docentes.network.RetrofitClient
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInClient
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.tasks.Task
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.Dispatchers
@@ -33,11 +26,9 @@ class RegisterApoderadoActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "RegisterApoderadoActivity"
-        private const val RC_SIGN_IN = 9004
     }
 
     private lateinit var auth: FirebaseAuth
-    private lateinit var googleSignInClient: GoogleSignInClient
 
     private lateinit var etDNI: TextInputEditText
     private lateinit var etFullName: TextInputEditText
@@ -61,14 +52,6 @@ class RegisterApoderadoActivity : AppCompatActivity() {
 
         // Initialize Firebase Auth
         auth = Firebase.auth
-
-        // Configure Google Sign In
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(getString(R.string.default_web_client_id))
-            .requestEmail()
-            .build()
-
-        googleSignInClient = GoogleSignIn.getClient(this, gso)
 
         initViews()
         setupRelationshipDropdown()
@@ -229,16 +212,26 @@ class RegisterApoderadoActivity : AppCompatActivity() {
                     user?.sendEmailVerification()?.addOnCompleteListener { verificationTask ->
                         if (verificationTask.isSuccessful) {
                             Log.d(TAG, "Correo de verificación enviado")
+                        } else {
+                            Log.w(TAG, "Error enviando verificación: ${verificationTask.exception}")
                         }
                     }
 
                     user?.getIdToken(true)?.addOnSuccessListener { result ->
                         val token = result.token
-                        registerUserInBackend(token, email, fullName, dni, phone, relationship)
+                        if (token != null) {
+                            registerUserInBackend(token, email, fullName, dni, phone, relationship)
+                        } else {
+                            showLoading(false)
+                            Toast.makeText(this, "Error: No se pudo obtener el token de autenticación", Toast.LENGTH_SHORT).show()
+                        }
+                    }?.addOnFailureListener { exception ->
+                        showLoading(false)
+                        Toast.makeText(this, "Error obteniendo token: ${exception.message}", Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     showLoading(false)
-                    Toast.makeText(this, "Error: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Error en registro: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
                 }
             }
     }
@@ -253,7 +246,7 @@ class RegisterApoderadoActivity : AppCompatActivity() {
         passwordConfirm: String
     ): Boolean {
         if (dni.length != 8) {
-            Toast.makeText(this, "Ingresa un DNI válido", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Ingresa un DNI válido de 8 dígitos", Toast.LENGTH_SHORT).show()
             return false
         }
 
@@ -262,8 +255,13 @@ class RegisterApoderadoActivity : AppCompatActivity() {
             return false
         }
 
+        if (fullName.isEmpty()) {
+            etFullName.error = "El nombre completo es requerido"
+            return false
+        }
+
         if (phone.isEmpty() || phone.length < 9) {
-            etPhone.error = "Ingresa un teléfono válido"
+            etPhone.error = "Ingresa un teléfono válido (mínimo 9 dígitos)"
             return false
         }
 
@@ -273,12 +271,12 @@ class RegisterApoderadoActivity : AppCompatActivity() {
         }
 
         if (email.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-            etEmail.error = "Correo inválido"
+            etEmail.error = "Correo electrónico inválido"
             return false
         }
 
         if (password.isEmpty() || password.length < 6) {
-            etPassword.error = "Mínimo 6 caracteres"
+            etPassword.error = "La contraseña debe tener mínimo 6 caracteres"
             return false
         }
 
@@ -290,52 +288,8 @@ class RegisterApoderadoActivity : AppCompatActivity() {
         return true
     }
 
-    private fun signUpWithGoogle() {
-        val signInIntent = googleSignInClient.signInIntent
-        startActivityForResult(signInIntent, RC_SIGN_IN)
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-
-        if (requestCode == RC_SIGN_IN) {
-            val task: Task<GoogleSignInAccount> = GoogleSignIn.getSignedInAccountFromIntent(data)
-            try {
-                val account = task.result
-                firebaseAuthWithGoogle(account.idToken!!)
-            } catch (e: ApiException) {
-                Log.w(TAG, "Google sign in failed", e)
-                Toast.makeText(this, "Error con Google: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun firebaseAuthWithGoogle(idToken: String) {
-        showLoading(true)
-
-        val credential = GoogleAuthProvider.getCredential(idToken, null)
-        auth.signInWithCredential(credential)
-            .addOnCompleteListener(this) { task ->
-                if (task.isSuccessful) {
-                    val user = auth.currentUser
-                    user?.getIdToken(true)?.addOnSuccessListener { result ->
-                        val token = result.token
-                        val dni = etDNI.text.toString().trim()
-                        val fullName = etFullName.text.toString().trim()
-                        val phone = etPhone.text.toString().trim()
-                        val relationship = actvRelationship.text.toString().trim()
-                        registerUserInBackend(token, user.email ?: "", fullName, dni, phone, relationship)
-                    }
-                } else {
-                    showLoading(false)
-                    Toast.makeText(this, "Autenticación fallida", Toast.LENGTH_SHORT).show()
-                }
-            }
-    }
-
     private fun registerUserInBackend(
-        token: String?,
+        token: String,
         email: String,
         fullName: String,
         dni: String,
@@ -380,11 +334,12 @@ class RegisterApoderadoActivity : AppCompatActivity() {
 
                             Toast.makeText(
                                 this@RegisterApoderadoActivity,
-                                "✅ Cuenta creada. Verifica tu correo electrónico",
+                                "✅ Cuenta creada exitosamente",
                                 Toast.LENGTH_LONG
                             ).show()
 
-                            val intent = Intent(this@RegisterApoderadoActivity, LoginActivity::class.java)
+                            // Redirigir al Dashboard del Apoderado
+                            val intent = Intent(this@RegisterApoderadoActivity, DashboardApoderadoActivity::class.java)
                             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                             startActivity(intent)
                             finish()
