@@ -2,6 +2,8 @@ package com.example.docentes.dialogs
 
 import android.app.Dialog
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -14,6 +16,7 @@ import com.example.docentes.models.ReniecData
 import com.example.docentes.models.ReniecRequest
 import com.example.docentes.network.ReniecClient
 import com.example.docentes.network.RetrofitClient
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,8 +47,7 @@ class GoogleSignUpDialogFragment : DialogFragment() {
     private lateinit var etDNI: TextInputEditText
     private lateinit var etFullName: TextInputEditText
     private lateinit var actvArea: AutoCompleteTextView
-    private lateinit var btnValidate: Button
-    private lateinit var btnComplete: Button
+    private lateinit var btnComplete: MaterialButton
     private lateinit var llValidating: LinearLayout
     private lateinit var llValidationStatus: LinearLayout
     private lateinit var ivStatusIcon: ImageView
@@ -53,7 +55,7 @@ class GoogleSignUpDialogFragment : DialogFragment() {
 
     private var reniecData: ReniecData? = null
     private var selectedAreaId: Int? = null
-    private var areasMap: Map<String, Int> = emptyMap() // ✅ Mapear nombre → ID
+    private var areasMap: Map<String, Int> = emptyMap()
 
     private var listener: GoogleSignUpListener? = null
 
@@ -84,7 +86,6 @@ class GoogleSignUpDialogFragment : DialogFragment() {
         etDNI = view.findViewById(R.id.etDNI)
         etFullName = view.findViewById(R.id.etFullName)
         actvArea = view.findViewById(R.id.actvArea)
-        btnValidate = view.findViewById(R.id.btnValidate)
         btnComplete = view.findViewById(R.id.btnComplete)
         llValidating = view.findViewById(R.id.llValidating)
         llValidationStatus = view.findViewById(R.id.llValidationStatus)
@@ -92,7 +93,7 @@ class GoogleSignUpDialogFragment : DialogFragment() {
         tvReniecStatus = view.findViewById(R.id.tvReniecStatus)
 
         // Botón cancelar
-        view.findViewById<Button>(R.id.btnCancel).setOnClickListener {
+        view.findViewById<MaterialButton>(R.id.btnCancel).setOnClickListener {
             listener?.onGoogleSignUpCancelled()
             dismiss()
         }
@@ -118,9 +119,11 @@ class GoogleSignUpDialogFragment : DialogFragment() {
                         actvArea.setOnItemClickListener { _, _, position, _ ->
                             selectedAreaId = areas[position].id
                             Log.d(TAG, "✅ Área seleccionada: ${areas[position].nombre} (ID: ${areas[position].id})")
+                            checkFormCompletion()
                         }
                     } else {
                         Log.e(TAG, "❌ No hay áreas disponibles")
+                        Toast.makeText(context, "No hay áreas disponibles. Contacta al administrador.", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
@@ -133,14 +136,23 @@ class GoogleSignUpDialogFragment : DialogFragment() {
     }
 
     private fun setupListeners() {
-        btnValidate.setOnClickListener {
-            val dni = etDNI.text.toString().trim()
-            if (dni.length == 8) {
-                validateDNI(dni)
-            } else {
-                Toast.makeText(context, "Ingresa un DNI válido de 8 dígitos", Toast.LENGTH_SHORT).show()
+        // ✅ VALIDACIÓN AUTOMÁTICA del DNI
+        etDNI.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+
+            override fun afterTextChanged(s: Editable?) {
+                val dni = s.toString().trim()
+                llValidationStatus.visibility = View.GONE
+                etFullName.setText("")
+                reniecData = null
+                btnComplete.isEnabled = false
+
+                if (dni.length == 8) {
+                    validateDNI(dni)
+                }
             }
-        }
+        })
 
         btnComplete.setOnClickListener {
             completeSignUp()
@@ -150,7 +162,6 @@ class GoogleSignUpDialogFragment : DialogFragment() {
     private fun validateDNI(dni: String) {
         llValidating.visibility = View.VISIBLE
         llValidationStatus.visibility = View.GONE
-        btnValidate.isEnabled = false
         etDNI.isEnabled = false
 
         lifecycleScope.launch {
@@ -164,7 +175,6 @@ class GoogleSignUpDialogFragment : DialogFragment() {
                 withContext(Dispatchers.Main) {
                     llValidating.visibility = View.GONE
                     llValidationStatus.visibility = View.VISIBLE
-                    btnValidate.isEnabled = true
                     etDNI.isEnabled = true
 
                     if (response.isSuccessful && response.body()?.success == true) {
@@ -179,7 +189,7 @@ class GoogleSignUpDialogFragment : DialogFragment() {
                         tvReniecStatus.text = "✅ DNI validado correctamente"
                         tvReniecStatus.setTextColor(requireContext().getColor(android.R.color.holo_green_dark))
 
-                        btnComplete.isEnabled = true
+                        checkFormCompletion()
                     } else {
                         showError("DNI no encontrado en RENIEC")
                     }
@@ -188,7 +198,6 @@ class GoogleSignUpDialogFragment : DialogFragment() {
                 withContext(Dispatchers.Main) {
                     llValidating.visibility = View.GONE
                     llValidationStatus.visibility = View.VISIBLE
-                    btnValidate.isEnabled = true
                     etDNI.isEnabled = true
                     showError("Error de conexión: ${e.message}")
                 }
@@ -202,6 +211,22 @@ class GoogleSignUpDialogFragment : DialogFragment() {
         tvReniecStatus.text = "❌ $message"
         tvReniecStatus.setTextColor(requireContext().getColor(android.R.color.holo_red_dark))
         btnComplete.isEnabled = false
+    }
+
+    /**
+     * ✅ Verifica si el formulario está completo para habilitar el botón
+     */
+    private fun checkFormCompletion() {
+        val isDNIValid = reniecData != null
+        val isAreaSelected = selectedAreaId != null
+
+        btnComplete.isEnabled = isDNIValid && isAreaSelected
+
+        if (btnComplete.isEnabled) {
+            btnComplete.text = "✅ Completar Registro"
+        } else {
+            btnComplete.text = "Completar Registro"
+        }
     }
 
     private fun completeSignUp() {

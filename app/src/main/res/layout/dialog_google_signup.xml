@@ -31,7 +31,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:hint="DNI"
-        app:helperText="Ingresa tu DNI de 8 dígitos"
+        app:helperText="Ingresa tu DNI de 8 dígitos (se validará automáticamente)"
         app:helperTextTextColor="#757575"
         app:prefixText="🆔 "
         app:boxStrokeColor="#1976D2"
@@ -45,18 +45,6 @@
             android:inputType="number"
             android:maxLength="8"/>
     </com.google.android.material.textfield.TextInputLayout>
-
-    <!-- Botón Validar DNI -->
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnValidate"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:text="🔍 Validar con RENIEC"
-        android:textAllCaps="false"
-        app:cornerRadius="8dp"
-        app:strokeColor="#1976D2"
-        android:layout_marginBottom="16dp"/>
 
     <!-- Loading RENIEC -->
     <LinearLayout
@@ -168,7 +156,7 @@
             android:id="@+id/btnComplete"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="✅ Completar"
+            android:text="✅ Completar Registro"
             android:textAllCaps="false"
             android:enabled="false"
             app:cornerRadius="8dp"/>

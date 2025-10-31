@@ -1,5 +1,6 @@
 package com.example.docentes
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.ProgressBar
@@ -37,6 +38,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Verificar que el usuario esté logueado
+        if (!isUserLoggedIn()) {
+            redirectToLogin()
+            return
+        }
+
+        // Cargar datos del usuario
+        loadUserData()
+
         rvBimesters = findViewById(R.id.recyclerViewBimesters)
         progressBar = findViewById(R.id.progressBar)
         tvEmptyState = findViewById(R.id.tvEmptyState)
@@ -44,6 +54,28 @@ class MainActivity : AppCompatActivity() {
         rvBimesters.layoutManager = LinearLayoutManager(this)
 
         loadBimesters()
+    }
+
+    private fun isUserLoggedIn(): Boolean {
+        val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        return sharedPreferences.getInt("user_id", 0) > 0
+    }
+
+    private fun redirectToLogin() {
+        val intent = Intent(this, LoginActivity::class.java)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
+    }
+
+    private fun loadUserData() {
+        val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        val userName = sharedPreferences.getString("user_full_name", "")
+        val userEmail = sharedPreferences.getString("user_email", "")
+
+        Log.d("MainActivity", "👤 Usuario cargado: $userName ($userEmail)")
+
+        // Actualizar UI con datos del usuario si es necesario
     }
 
     private fun loadBimesters(keepExpanded: Boolean = false) {

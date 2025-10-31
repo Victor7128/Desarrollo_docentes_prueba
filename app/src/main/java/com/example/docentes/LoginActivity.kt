@@ -144,8 +144,12 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun signInWithGoogle() {
-        val signInIntent = googleSignInClient.signInIntent
-        startActivityForResult(signInIntent, RC_SIGN_IN)
+        // ✅ FORZAR SELECCIÓN DE CUENTA cada vez
+        googleSignInClient.signOut().addOnCompleteListener(this) {
+            // Una vez cerrada sesión, iniciar el flujo de sign-in
+            val signInIntent = googleSignInClient.signInIntent
+            startActivityForResult(signInIntent, RC_SIGN_IN)
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -174,23 +178,33 @@ class LoginActivity : AppCompatActivity() {
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         auth.signInWithCredential(credential)
             .addOnCompleteListener(this) { task ->
-                showLoading(false)
-
                 if (task.isSuccessful) {
                     Log.d(TAG, "signInWithCredential:success")
                     val user = auth.currentUser
 
                     user?.getIdToken(true)?.addOnSuccessListener { result ->
                         val token = result.token
+                        Log.d(TAG, "✅ Google Sign-In exitoso, verificando con backend...")
                         verifyUserAndRedirect(token)
+                    }?.addOnFailureListener { e ->
+                        showLoading(false)
+                        Log.e(TAG, "❌ Error obteniendo token", e)
+                        Toast.makeText(this, "Error de autenticación", Toast.LENGTH_SHORT).show()
                     }
                 } else {
+                    showLoading(false)
                     Log.w(TAG, "signInWithCredential:failure", task.exception)
-                    Toast.makeText(
-                        this,
-                        "Autenticación fallida: ${task.exception?.message}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+
+                    // Mensaje más específico para Google Sign-In
+                    val errorMessage = when {
+                        task.exception?.message?.contains("network error") == true ->
+                            "Error de red. Verifica tu conexión."
+                        task.exception?.message?.contains("invalid credential") == true ->
+                            "Credenciales inválidas. Intenta nuevamente."
+                        else -> "Error en inicio de sesión con Google: ${task.exception?.message}"
+                    }
+
+                    Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
                 }
             }
     }

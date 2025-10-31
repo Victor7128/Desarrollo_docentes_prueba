@@ -1,7 +1,11 @@
 package com.example.docentes
 
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Uri
 import android.os.Bundle
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.*
@@ -19,6 +23,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.tasks.Task
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
@@ -29,18 +34,16 @@ import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 class RegisterDocenteActivity : AppCompatActivity(),
     GoogleSignUpDialogFragment.GoogleSignUpListener {
-
     companion object {
         private const val TAG = "RegisterDocenteActivity"
         private const val RC_SIGN_IN = 9005
     }
-
     private lateinit var auth: FirebaseAuth
     private lateinit var googleSignInClient: GoogleSignInClient
-
     private lateinit var etDNI: TextInputEditText
     private lateinit var etFullName: TextInputEditText
     private lateinit var actvArea: AutoCompleteTextView
@@ -54,12 +57,9 @@ class RegisterDocenteActivity : AppCompatActivity(),
     private lateinit var llValidationStatus: LinearLayout
     private lateinit var ivStatusIcon: ImageView
     private lateinit var tvReniecStatus: TextView
-
     private var reniecData: ReniecData? = null
     private var selectedAreaId: Int? = null
     private var selectedAreaName: String? = null
-
-    // Variables temporales para Google Sign-Up
     private var pendingGoogleAccount: GoogleSignInAccount? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,16 +68,159 @@ class RegisterDocenteActivity : AppCompatActivity(),
 
         auth = Firebase.auth
 
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(getString(R.string.default_web_client_id))
-            .requestEmail()
-            .build()
-
-        googleSignInClient = GoogleSignIn.getClient(this, gso)
+        // ✅ Configuración mejorada de Google Sign-In
+        configureGoogleSignIn()
 
         initViews()
         loadAreasFromAPI()
         setupListeners()
+        diagnoseGoogleSignIn()
+        diagnoseDeveloperError()
+    }
+
+    private fun configureGoogleSignIn() {
+        try {
+            // 1. Verificar que google-services.json esté configurado
+            val googleAppId = getString(R.string.google_app_id)
+            if (googleAppId.isEmpty() || googleAppId == "debug_check") {
+                throw IllegalStateException("google-services.json no configurado correctamente")
+            }
+
+            // 2. Obtener Web Client ID de forma segura
+            val webClientId = getString(R.string.default_web_client_id)
+            if (webClientId.isEmpty()) {
+                throw IllegalStateException("default_web_client_id no encontrado en strings.xml")
+            }
+
+            Log.d(TAG, "🎯 Configurando Google Sign-In:")
+            Log.d(TAG, "   - Package: $packageName")
+            Log.d(TAG, "   - Google App ID: ${googleAppId.take(10)}...")
+            Log.d(TAG, "   - Web Client ID: ${webClientId.take(10)}...")
+
+            // 3. Configurar Google Sign-In Options
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestIdToken(webClientId)
+                .requestEmail()
+                .requestProfile()
+                .build()
+
+            // 4. Crear cliente
+            googleSignInClient = GoogleSignIn.getClient(this, gso)
+
+            Log.d(TAG, "✅ Google Sign-In configurado exitosamente")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ ERROR CRÍTICO en configuración", e)
+            showCriticalConfigError(e)
+        }
+    }
+
+    private fun showCriticalConfigError(exception: Exception) {
+        val solutionSteps = """
+        🔧 SOLUCIÓN PARA ERROR DE CONFIGURACIÓN:
+        
+        1. Verificar google-services.json:
+           - Descarga NUEVO desde Firebase Console
+           - Coloca en app/google-services.json
+        
+        2. Verificar strings.xml:
+           - Agrega: <string name="default_web_client_id">TU_CLIENT_ID</string>
+        
+        3. Verificar build.gradle:
+           - Aplica plugin: 'com.google.gms.google-services'
+           - Package name debe coincidir
+        
+        4. Sincronizar y limpiar proyecto:
+           - Build → Clean Project
+           - Build → Rebuild Project
+        
+        Error: ${exception.message}
+    """.trimIndent()
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("❌ Error de Configuración Firebase")
+            .setMessage(solutionSteps)
+            .setPositiveButton("Ver Firebase Console") { _, _ ->
+                // Abrir Firebase console en el navegador
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://console.firebase.google.com/")
+                }
+                startActivity(intent)
+            }
+            .setNegativeButton("Cerrar") { _, _ -> }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun handleGoogleSignInError(e: ApiException) {
+        val errorMessage = when (e.statusCode) {
+            CommonStatusCodes.NETWORK_ERROR ->
+                "Error de red. Verifica tu conexión a internet."
+
+            CommonStatusCodes.INTERNAL_ERROR ->
+                "Error interno. Reintenta más tarde."
+
+            CommonStatusCodes.DEVELOPER_ERROR ->
+                "Error de configuración del desarrollador. Verifica:\n" +
+                        "1. SHA-1 en Firebase Console\n" +
+                        "2. Package name correcto\n" +
+                        "3. Google Sign-In habilitado"
+
+            CommonStatusCodes.INVALID_ACCOUNT ->
+                "Cuenta de Google inválida o no autorizada."
+
+            CommonStatusCodes.SIGN_IN_REQUIRED ->
+                "Debes iniciar sesión en el dispositivo con una cuenta Google."
+
+            12501 -> // SIGN_IN_CANCELLED
+                "Inicio de sesión cancelado por el usuario."
+
+            12502 -> // SIGN_IN_CURRENTLY_IN_PROGRESS
+                "Ya hay un inicio de sesión en progreso."
+
+            12500 -> // INTERNAL_ERROR específico de Google Sign-In
+                "Error interno de Google Sign-In. Reinstala Google Play Services."
+
+            10 -> // DEVELOPER_ERROR
+                "Configuración incorrecta:\n" +
+                        "• Verifica google-services.json\n" +
+                        "• Revisa SHA-1 en Firebase\n" +
+                        "• Confirma package name"
+
+            else ->
+                "Error desconocido (${e.statusCode}): ${e.message ?: "Sin detalles"}"
+        }
+
+        Log.e(TAG, "Código error: ${e.statusCode}, Mensaje: $errorMessage")
+
+        showConfigErrorDialog(errorMessage)
+        googleSignInClient.signOut()
+    }
+
+    private fun showConfigErrorDialog(message: String) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("❌ Error de Configuración")
+            .setMessage(message)
+            .setPositiveButton("Reintentar") { _, _ ->
+                signUpWithGoogle()
+            }
+            .setNegativeButton("Ver Configuración") { _, _ ->
+                // Podrías abrir una actividad de configuración
+                checkFirebaseConfiguration()
+            }
+            .show()
+    }
+
+    private fun checkFirebaseConfiguration() {
+        Log.d(TAG, "🔍 Verificando configuración Firebase:")
+        Log.d(TAG, "   - Package: $packageName")
+        Log.d(TAG, "   - Firebase UID: ${auth.currentUser?.uid ?: "No logueado"}")
+        Log.d(TAG, "   - Google Client: ${getString(R.string.default_web_client_id).take(10)}...")
+
+        Toast.makeText(this,
+            "Verifica:\n1. google-services.json\n2. SHA-1 en Firebase\n3. Google Sign-In habilitado",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun initViews() {
@@ -261,6 +404,8 @@ class RegisterDocenteActivity : AppCompatActivity(),
                     user?.sendEmailVerification()?.addOnCompleteListener { verificationTask ->
                         if (verificationTask.isSuccessful) {
                             Log.d(TAG, "📧 Correo de verificación enviado")
+                        } else {
+                            Log.e(TAG, "❌ Error enviando verificación", verificationTask.exception)
                         }
                     }
 
@@ -271,15 +416,36 @@ class RegisterDocenteActivity : AppCompatActivity(),
                     }?.addOnFailureListener { e ->
                         showLoading(false)
                         Log.e(TAG, "❌ Error obteniendo token", e)
-                        Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-
-                        // Eliminar cuenta de Firebase si falló
+                        Toast.makeText(this, "Error de autenticación. Intenta nuevamente.", Toast.LENGTH_SHORT).show()
                         user?.delete()
                     }
                 } else {
                     showLoading(false)
                     Log.e(TAG, "❌ Error creando cuenta Firebase", task.exception)
-                    Toast.makeText(this, "Error: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+
+                    // ✅ MANEJO MEJORADO DE ERRORES FIREBASE
+                    val errorMessage = when {
+                        task.exception?.message?.contains("email already in use", ignoreCase = true) == true -> {
+                            clearFormFields()
+                            "Este correo electrónico ya está registrado. Por favor inicia sesión o usa otro correo."
+                        }
+                        task.exception?.message?.contains("invalid email", ignoreCase = true) == true -> {
+                            etEmail.error = "Correo inválido"
+                            "El formato del correo electrónico no es válido."
+                        }
+                        task.exception?.message?.contains("weak password", ignoreCase = true) == true -> {
+                            etPassword.error = "Contraseña muy débil"
+                            "La contraseña es muy débil. Usa una contraseña más segura."
+                        }
+                        task.exception?.message?.contains("network", ignoreCase = true) == true -> {
+                            "Error de conexión. Verifica tu internet e intenta nuevamente."
+                        }
+                        else -> {
+                            "Error al crear la cuenta: ${task.exception?.message ?: "Error desconocido"}"
+                        }
+                    }
+
+                    Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
                 }
             }
     }
@@ -326,12 +492,12 @@ class RegisterDocenteActivity : AppCompatActivity(),
         return true
     }
 
-    /**
-     * ✅ Inicia Google Sign-In (el modal valida DNI + área)
-     */
     private fun signUpWithGoogle() {
-        val signInIntent = googleSignInClient.signInIntent
-        startActivityForResult(signInIntent, RC_SIGN_IN)
+        // ✅ Cerrar sesión primero para forzar selector
+        googleSignInClient.signOut().addOnCompleteListener(this) {
+            val signInIntent = googleSignInClient.signInIntent
+            startActivityForResult(signInIntent, RC_SIGN_IN)
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -340,24 +506,38 @@ class RegisterDocenteActivity : AppCompatActivity(),
 
         if (requestCode == RC_SIGN_IN) {
             val task: Task<GoogleSignInAccount> = GoogleSignIn.getSignedInAccountFromIntent(data)
-            try {
-                val account = task.result
-                Log.d(TAG, "✅ Google Sign-In exitoso: ${account.email}")
-
-                // Guardar account y mostrar dialog
-                pendingGoogleAccount = account
-                showGoogleSignUpDialog(account)
-
-            } catch (e: ApiException) {
-                Log.w(TAG, "❌ Google sign in failed", e)
-                Toast.makeText(this, "Error con Google: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            handleGoogleSignInResult(task)
         }
     }
 
-    /**
-     * ✅ Muestra el diálogo para completar DNI y área
-     */
+    private fun handleGoogleSignInResult(task: Task<GoogleSignInAccount>) {
+        try {
+            val account = task.getResult(ApiException::class.java)
+            Log.d(TAG, "✅ Google Sign-In exitoso: ${account.email}")
+
+            // Verificaciones adicionales
+            if (account.idToken == null) {
+                Log.e(TAG, "❌ ID Token es null")
+                showConfigErrorDialog("Token de Google no disponible. Revisa la configuración OAuth.")
+                return
+            }
+
+            if (account.email.isNullOrEmpty()) {
+                Log.e(TAG, "❌ Email de Google es null o vacío")
+                showConfigErrorDialog("No se pudo obtener el email de Google. Verifica los permisos.")
+                return
+            }
+
+            // Todo OK, proceder
+            pendingGoogleAccount = account
+            showGoogleSignUpDialog(account)
+
+        } catch (e: ApiException) {
+            Log.e(TAG, "❌ Google Sign-In falló", e)
+            handleGoogleSignInError(e)
+        }
+    }
+
     private fun showGoogleSignUpDialog(account: GoogleSignInAccount) {
         val dialog = GoogleSignUpDialogFragment.newInstance(
             email = account.email ?: "",
@@ -367,10 +547,6 @@ class RegisterDocenteActivity : AppCompatActivity(),
         dialog.show(supportFragmentManager, "GoogleSignUpDialog")
     }
 
-    /**
-     * ✅ Callback: Usuario completó el formulario del modal
-     * AHORA validamos el área antes de autenticar con Firebase
-     */
     override fun onGoogleSignUpComplete(dni: String, fullName: String, areaId: Int, areaName: String) {
         val account = pendingGoogleAccount
         if (account == null) {
@@ -395,9 +571,6 @@ class RegisterDocenteActivity : AppCompatActivity(),
         validateAreaBeforeFirebaseAuth(account, dni, fullName, areaId, areaName)
     }
 
-    /**
-     * ✅ NUEVO: Valida que el área exista antes de crear cuenta Firebase
-     */
     private fun validateAreaBeforeFirebaseAuth(
         account: GoogleSignInAccount,
         dni: String,
@@ -406,6 +579,13 @@ class RegisterDocenteActivity : AppCompatActivity(),
         areaName: String
     ) {
         showLoading(true)
+
+        Log.d(TAG, "🔍 INICIANDO VALIDACIÓN DE ÁREA:")
+        Log.d(TAG, "   - Google Account: ${account.email}")
+        Log.d(TAG, "   - DNI: $dni")
+        Log.d(TAG, "   - Nombre: $fullName")
+        Log.d(TAG, "   - Área ID: $areaId")
+        Log.d(TAG, "   - Token no null: ${account.idToken != null}")
 
         lifecycleScope.launch {
             try {
@@ -420,12 +600,21 @@ class RegisterDocenteActivity : AppCompatActivity(),
 
                 withContext(Dispatchers.Main) {
                     // ✅ Área OK, proceder con Firebase
+                    Log.d(TAG, "🚀 INICIANDO AUTENTICACIÓN FIREBASE CON GOOGLE")
+
+                    // ✅ Verificación final del token
+                    if (account.idToken == null) {
+                        showLoading(false)
+                        Toast.makeText(this@RegisterDocenteActivity, "Error: Token de Google no disponible", Toast.LENGTH_LONG).show()
+                        return@withContext
+                    }
+
                     firebaseAuthWithGoogle(
                         idToken = account.idToken!!,
                         dni = dni,
                         fullName = fullName,
                         areaId = areaId,
-                        areaName = area.nombre, // Usar el nombre del backend
+                        areaName = area.nombre,
                         email = account.email ?: ""
                     )
                 }
@@ -438,7 +627,8 @@ class RegisterDocenteActivity : AppCompatActivity(),
                     val errorMsg = when {
                         e.message?.contains("404") == true ->
                             "El área seleccionada no existe en el sistema.\n\nPor favor contacta al administrador."
-                        e.message?.contains("timeout") == true ->
+                        e.message?.contains("timeout") == true ||
+                                e.message?.contains("Unable to resolve host") == true ->
                             "Error de conexión. Verifica tu internet."
                         else ->
                             "Error validando área: ${e.message}"
@@ -455,15 +645,35 @@ class RegisterDocenteActivity : AppCompatActivity(),
                             pendingGoogleAccount = null
                             googleSignInClient.signOut()
                         }
+                        .setNeutralButton("Reintentar Google") { _, _ ->
+                            // Reintentar Google Sign-In directamente
+                            signUpWithGoogle()
+                        }
                         .show()
                 }
             }
         }
     }
 
-    /**
-     * ✅ Callback: Usuario canceló el modal
-     */
+    private fun isNetworkAvailable(): Boolean {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networkInfo = connectivityManager.activeNetworkInfo
+        return networkInfo != null && networkInfo.isConnected
+    }
+
+    private fun diagnoseGoogleSignIn() {
+        try {
+            val lastAccount = GoogleSignIn.getLastSignedInAccount(this)
+            Log.d(TAG, "Última cuenta: ${lastAccount?.email ?: "Ninguna"}")
+
+            val webClientId = getString(R.string.default_web_client_id)
+            Log.d(TAG, "Web Client ID: ${if (webClientId.startsWith(" ")) "❌ VACÍO" else "✅ CONFIGURADO"}")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error en diagnóstico", e)
+        }
+    }
+
     override fun onGoogleSignUpCancelled() {
         pendingGoogleAccount = null
         googleSignInClient.signOut()
@@ -480,37 +690,74 @@ class RegisterDocenteActivity : AppCompatActivity(),
     ) {
         showLoading(true)
 
+        // ✅ VERIFICAR que el token no sea null o vacío
+        if (idToken.isEmpty()) {
+            showLoading(false)
+            Log.e(TAG, "❌ ID Token de Google es vacío")
+            Toast.makeText(this, "Error: Token de Google inválido", Toast.LENGTH_LONG).show()
+            googleSignInClient.signOut()
+            return
+        }
+
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         auth.signInWithCredential(credential)
-            .addOnCompleteListener(this) { task ->
+            .addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val user = auth.currentUser
 
                     if (user == null) {
                         showLoading(false)
+                        Log.e(TAG, "❌ Usuario Firebase null después de autenticación exitosa")
                         Toast.makeText(this, "Error: Usuario no disponible", Toast.LENGTH_SHORT).show()
+                        googleSignInClient.signOut()
                         return@addOnCompleteListener
                     }
 
-                    Log.d(TAG, "✅ Firebase auth exitoso: ${user.uid}")
+                    Log.d(TAG, "✅ Firebase auth exitoso: ${user.uid}, Email: ${user.email}")
 
+                    // ✅ Obtener token actualizado
                     user.getIdToken(true).addOnSuccessListener { result ->
                         val token = result.token
-                        // ✅ Registrar en backend INMEDIATAMENTE
-                        registerUserInBackend(token, email, fullName, dni, areaName, areaId)
+                        if (token != null) {
+                            // ✅ Registrar en backend
+                            registerUserInBackend(token, email, fullName, dni, areaName, areaId)
+                        } else {
+                            showLoading(false)
+                            Log.e(TAG, "❌ Token Firebase es null")
+                            Toast.makeText(this, "Error de autenticación. Intenta nuevamente.", Toast.LENGTH_SHORT).show()
+                            user.delete()
+                            googleSignInClient.signOut()
+                        }
                     }.addOnFailureListener { e ->
                         showLoading(false)
                         Log.e(TAG, "❌ Error obteniendo token", e)
-                        Toast.makeText(this, "Error obteniendo token: ${e.message}", Toast.LENGTH_SHORT).show()
-
-                        // Eliminar cuenta si falló
+                        Toast.makeText(this, "Error de autenticación. Intenta nuevamente.", Toast.LENGTH_SHORT).show()
                         user.delete()
                         googleSignInClient.signOut()
                     }
                 } else {
                     showLoading(false)
-                    Log.e(TAG, "❌ Firebase auth fallida", task.exception)
-                    Toast.makeText(this, "Autenticación fallida: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                    val exception = task.exception
+                    Log.e(TAG, "❌ Firebase auth fallida", exception)
+
+                    // ✅ MANEJO MEJORADO DE ERRORES GOOGLE AUTH
+                    val errorMessage = when {
+                        exception?.message?.contains("invalid credential", ignoreCase = true) == true ->
+                            "Credenciales de Google inválidas. Intenta nuevamente."
+                        exception?.message?.contains("already exists", ignoreCase = true) == true ||
+                                exception?.message?.contains("already in use", ignoreCase = true) == true -> {
+                            // Limpiar datos pendientes de Google
+                            pendingGoogleAccount = null
+                            googleSignInClient.signOut()
+                            "Esta cuenta de Google ya está registrada. Por favor inicia sesión."
+                        }
+                        exception?.message?.contains("network", ignoreCase = true) == true ->
+                            "Error de conexión. Verifica tu internet e intenta nuevamente."
+                        else ->
+                            "Error de autenticación con Google. Intenta nuevamente."
+                    }
+
+                    Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
                     googleSignInClient.signOut()
                 }
             }
@@ -585,25 +832,52 @@ class RegisterDocenteActivity : AppCompatActivity(),
 
                     if (response.isSuccessful && response.body()?.success == true) {
                         Log.d(TAG, "✅ Registro exitoso en backend")
+                        val userResponse = response.body()!!.data!!
+
+                        // ✅ GUARDAR DATOS DEL USUARIO Y REDIRIGIR DIRECTAMENTE
+                        saveUserData(userResponse)
+
                         val isGoogleFlow = pendingGoogleAccount != null
+                        val isEmailVerified = auth.currentUser?.isEmailVerified ?: false
 
                         val message = if (isGoogleFlow) {
-                            "Tu cuenta de docente ha sido creada exitosamente.\n\n✅ Registro completado con Google"
+                            "✅ Tu cuenta de docente ha sido creada exitosamente.\n\nSerás redirigido automáticamente..."
+                        } else if (!isEmailVerified) {
+                            "✅ Tu cuenta de docente ha sido creada exitosamente.\n\n📧 Hemos enviado un correo de verificación a:\n$email\n\nPuedes acceder ahora, pero para funciones completas verifica tu correo."
                         } else {
-                            "Tu cuenta de docente ha sido creada exitosamente.\n\n📧 Hemos enviado un correo de verificación a:\n$email\n\nPor favor verifica tu correo antes de iniciar sesión."
+                            "✅ Tu cuenta de docente ha sido creada exitosamente.\n\nSerás redirigido automáticamente..."
                         }
 
-                        androidx.appcompat.app.AlertDialog.Builder(this@RegisterDocenteActivity)
+                        // ✅ MOSTRAR DIÁLOGO DE ÉXITO
+                        val dialog = androidx.appcompat.app.AlertDialog.Builder(this@RegisterDocenteActivity)
                             .setTitle("✅ Cuenta Creada")
                             .setMessage(message)
-                            .setPositiveButton("Ir a Login") { _, _ ->
-                                val intent = Intent(this@RegisterDocenteActivity, LoginActivity::class.java)
-                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                startActivity(intent)
-                                finish()
+                            .setPositiveButton("Continuar") { _, _ ->
+                                if (isGoogleFlow || isEmailVerified) {
+                                    redirectToMainActivity(userResponse)
+                                } else {
+                                    // Para email no verificado, ir al login
+                                    goToLogin()
+                                }
                             }
                             .setCancelable(false)
-                            .show()
+                            .create()
+
+                        dialog.show()
+
+                        // ✅ REDIRECCIÓN AUTOMÁTICA después de 3 segundos (solo si es Google o email verificado)
+                        if (isGoogleFlow || isEmailVerified) {
+                            lifecycleScope.launch {
+                                delay(3000) // Esperar 3 segundos
+                                withContext(Dispatchers.Main) {
+                                    if (dialog.isShowing) {
+                                        dialog.dismiss()
+                                    }
+                                    redirectToMainActivity(userResponse)
+                                }
+                            }
+                        }
+
                     } else {
                         val errorBody = response.errorBody()?.string()
                         Log.e(TAG, "❌ Error del servidor: $errorBody")
@@ -621,21 +895,66 @@ class RegisterDocenteActivity : AppCompatActivity(),
                         Log.e(TAG, "Error message: $errorMessage")
                         Log.e(TAG, "Error details: $errorDetails")
 
-                        // ❌ SI FALLA EL BACKEND, ELIMINAR CUENTA DE FIREBASE
-                        user.delete().addOnCompleteListener { deleteTask ->
-                            if (deleteTask.isSuccessful) {
-                                Log.d(TAG, "🗑️ Cuenta de Firebase eliminada tras fallo en backend")
+                        // ✅ MANEJO MEJORADO DE ERRORES PARA EL USUARIO
+                        val userFriendlyMessage = when {
+                            errorMessage.contains("Usuario ya existe", ignoreCase = true) -> {
+                                // Limpiar campos específicos para "usuario ya existe"
+                                clearFormFields()
+                                "Esta cuenta ya está registrada. Por favor inicia sesión o usa otro correo."
+                            }
+                            errorMessage.contains("DNI inválido", ignoreCase = true) -> {
+                                etDNI.error = "DNI inválido"
+                                "El DNI ingresado no es válido. Debe tener 8 dígitos."
+                            }
+                            errorMessage.contains("Área no encontrada", ignoreCase = true) -> {
+                                actvArea.text?.clear()
+                                "El área seleccionada no existe. Por favor selecciona otra área."
+                            }
+                            errorMessage.contains("Error de base de datos", ignoreCase = true) -> {
+                                "Error del sistema. Por favor intenta nuevamente más tarde."
+                            }
+                            else -> {
+                                // Mensaje genérico para otros errores
+                                "Error en el registro: $errorMessage"
+                            }
+                        }
+
+                        // ✅ Mostrar mensaje amigable al usuario
+                        androidx.appcompat.app.AlertDialog.Builder(this@RegisterDocenteActivity)
+                            .setTitle("❌ Error en el Registro")
+                            .setMessage(userFriendlyMessage)
+                            .setPositiveButton("Reintentar") { _, _ ->
+                                // Limpiar campos según el tipo de error
+                                when {
+                                    errorMessage.contains("Usuario ya existe", ignoreCase = true) -> {
+                                        etEmail.requestFocus()
+                                    }
+                                    errorMessage.contains("DNI inválido", ignoreCase = true) -> {
+                                        etDNI.requestFocus()
+                                    }
+                                    errorMessage.contains("Área no encontrada", ignoreCase = true) -> {
+                                        actvArea.requestFocus()
+                                    }
+                                    else -> {
+                                        // No hacer nada específico
+                                    }
+                                }
+                            }
+                            .setNegativeButton("Ir al Login") { _, _ ->
+                                startActivity(Intent(this@RegisterDocenteActivity, LoginActivity::class.java))
+                                finish()
+                            }
+                            .show()
+
+                        // ❌ SI FALLA EL BACKEND, ELIMINAR CUENTA DE FIREBASE (solo si no es "usuario ya existe")
+                        if (!errorMessage.contains("Usuario ya existe", ignoreCase = true)) {
+                            user.delete().addOnCompleteListener { deleteTask ->
+                                if (deleteTask.isSuccessful) {
+                                    Log.d(TAG, "🗑️ Cuenta de Firebase eliminada tras fallo en backend")
+                                }
                             }
                         }
                         googleSignInClient.signOut()
-
-                        androidx.appcompat.app.AlertDialog.Builder(this@RegisterDocenteActivity)
-                            .setTitle("❌ Error en el Registro")
-                            .setMessage("$errorMessage${if (errorDetails != null) "\n\n$errorDetails" else ""}")
-                            .setPositiveButton("Reintentar") { _, _ ->
-                                // Usuario puede reintentar
-                            }
-                            .show()
                     }
                 }
 
@@ -663,9 +982,97 @@ class RegisterDocenteActivity : AppCompatActivity(),
         }
     }
 
+    private fun clearFormFields() {
+        runOnUiThread {
+            // Limpiar campos de email y contraseña
+            etEmail.text?.clear()
+            etPassword.text?.clear()
+            etPasswordConfirm.text?.clear()
+
+            // Limpiar errores visuales
+            etEmail.error = null
+            etPassword.error = null
+            etPasswordConfirm.error = null
+
+            // Enfocar en el campo de email para facilitar corrección
+            etEmail.requestFocus()
+
+            Log.d(TAG, "🧹 Campos del formulario limpiados")
+        }
+    }
+
+    private fun redirectToMainActivity(userResponse: com.example.docentes.models.UserResponse) {
+        Log.d(TAG, "🚀 Redirigiendo a MainActivity...")
+
+        val intent = Intent(this@RegisterDocenteActivity, MainActivity::class.java)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
+    }
+
+    private fun goToLogin() {
+        val intent = Intent(this@RegisterDocenteActivity, LoginActivity::class.java)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
+    }
+
+    private fun saveUserData(userResponse: com.example.docentes.models.UserResponse) {
+        val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        val editor = sharedPreferences.edit()
+
+        editor.putInt("user_id", userResponse.id)
+        editor.putString("user_email", userResponse.email)
+        editor.putString("user_role", userResponse.role)
+        editor.putString("user_status", userResponse.status)
+
+        // Guardar datos del perfil
+        val profileData = userResponse.profileData
+        editor.putString("user_full_name", profileData["full_name"] as? String)
+        editor.putInt("user_area_id", (profileData["area_id"] as? Double)?.toInt() ?: 0)
+        editor.putString("user_employee_code", profileData["employee_code"] as? String)
+        editor.putString("user_dni", profileData["dni"] as? String)
+
+        editor.apply()
+
+        Log.d(TAG, "💾 Datos del usuario guardados en SharedPreferences - ID: ${userResponse.id}")
+    }
+
     private fun showLoading(show: Boolean) {
         progressBar.visibility = if (show) View.VISIBLE else View.GONE
         btnRegister.isEnabled = !show
         btnGoogleSignUp.isEnabled = !show
+    }
+
+    private fun diagnoseDeveloperError() {
+        Log.d(TAG, "🔍 DIAGNÓSTICO ERROR DEVELOPER (10):")
+
+        // 1. Verificar google-services.json
+        try {
+            val resources = resources
+            val resourceId = resources.getIdentifier("google_app_id", "string", packageName)
+            val appId = getString(resourceId)
+            Log.d(TAG, "✅ Google App ID: ${appId.take(10)}...")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ google-services.json NO configurado correctamente")
+        }
+
+        // 2. Verificar Web Client ID
+        val webClientId = getString(R.string.default_web_client_id)
+        Log.d(TAG, "🔑 Web Client ID: ${if (webClientId.isNotEmpty()) "✅ Presente" else "❌ FALTANTE"}")
+        if (webClientId.isNotEmpty()) {
+            Log.d(TAG, "   - Client ID empieza con: ${webClientId.take(20)}...")
+        }
+
+        // 3. Verificar package name
+        Log.d(TAG, "📦 Package Name: $packageName")
+
+        // 4. Verificar Google Play Services
+        try {
+            val version = packageManager.getPackageInfo("com.google.android.gms", 0).versionName
+            Log.d(TAG, "🎮 Google Play Services: ✅ v$version")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Google Play Services no instalado")
+        }
     }
 }

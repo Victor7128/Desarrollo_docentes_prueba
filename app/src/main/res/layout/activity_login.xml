@@ -92,7 +92,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Si eres docente puedes ingresar directamente con tu cuenta Google institucional."
+            android:text="Si eres docente puedes ingresar directamente con tu cuenta Google."
             android:textColor="#1976D2"
             android:textSize="14sp"
             android:textStyle="bold"/>
