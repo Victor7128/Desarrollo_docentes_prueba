@@ -19,13 +19,18 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 class RegisterAlumnoActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "RegisterAlumnoActivity"
+        private const val REQUEST_TIMEOUT = 30000L // 30 segundos
     }
 
     private lateinit var auth: FirebaseAuth
@@ -101,10 +106,12 @@ class RegisterAlumnoActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val request = ReniecRequest(dni = dni)
-                val response = ReniecClient.apiService.validateDNI(
-                    token = ReniecClient.getToken(),
-                    request = request
-                )
+                val response = withContext(Dispatchers.IO) {
+                    ReniecClient.apiService.validateDNI(
+                        token = ReniecClient.getToken(),
+                        request = request
+                    )
+                }
 
                 withContext(Dispatchers.Main) {
                     llValidating.visibility = View.GONE
@@ -184,7 +191,7 @@ class RegisterAlumnoActivity : AppCompatActivity() {
                 if (task.isSuccessful) {
                     val user = auth.currentUser
 
-                    // Enviar verificación de correo
+                    // Enviar verificación de correo (pero no esperar a que termine)
                     user?.sendEmailVerification()?.addOnCompleteListener { verificationTask ->
                         if (verificationTask.isSuccessful) {
                             Log.d(TAG, "Correo de verificación enviado")
@@ -193,10 +200,11 @@ class RegisterAlumnoActivity : AppCompatActivity() {
                         }
                     }
 
+                    // Obtener token y registrar en backend
                     user?.getIdToken(true)?.addOnSuccessListener { result ->
                         val token = result.token
                         if (token != null) {
-                            registerUserInBackend(token, email, dni)
+                            registerUserInBackend(email, dni)
                         } else {
                             showLoading(false)
                             Toast.makeText(this, "Error: No se pudo obtener el token de autenticación", Toast.LENGTH_SHORT).show()
@@ -207,7 +215,14 @@ class RegisterAlumnoActivity : AppCompatActivity() {
                     }
                 } else {
                     showLoading(false)
-                    Toast.makeText(this, "Error en registro: ${task.exception?.message}", Toast.LENGTH_SHORT).show()
+                    val errorMessage = when {
+                        task.exception?.message?.contains("email address is already") == true ->
+                            "El correo electrónico ya está en uso"
+                        task.exception?.message?.contains("badly formatted") == true ->
+                            "Formato de correo electrónico inválido"
+                        else -> "Error en registro: ${task.exception?.message}"
+                    }
+                    Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
                 }
             }
     }
@@ -241,83 +256,130 @@ class RegisterAlumnoActivity : AppCompatActivity() {
         return true
     }
 
-    private fun registerUserInBackend(token: String, email: String, dni: String) {
+    private fun registerUserInBackend(email: String, dni: String) {
         showLoading(true)
 
         lifecycleScope.launch {
             try {
-                val user = auth.currentUser
-                if (user == null) {
-                    showLoading(false)
-                    Toast.makeText(this@RegisterAlumnoActivity, "Error: usuario no autenticado", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
+                // Agregar timeout para evitar carga infinita
+                withTimeout(REQUEST_TIMEOUT) {
+                    val user = auth.currentUser
+                    if (user == null) {
+                        withContext(Dispatchers.Main) {
+                            showLoading(false)
+                            Toast.makeText(this@RegisterAlumnoActivity, "Error: usuario no autenticado", Toast.LENGTH_SHORT).show()
+                        }
+                        return@withTimeout
+                    }
 
-                // Preparar request
-                val request = RegisterAlumnoRequest(
-                    dni = dni,
-                    fullName = reniecData?.nombreCompleto ?: etFullName.text.toString(),
-                    email = email,
-                    firebaseUid = user.uid,
-                    nombres = reniecData?.nombres,
-                    apellidoPaterno = reniecData?.apellidoPaterno,
-                    apellidoMaterno = reniecData?.apellidoMaterno
-                )
+                    // Preparar request
+                    val request = RegisterAlumnoRequest(
+                        dni = dni,
+                        fullName = reniecData?.nombreCompleto ?: etFullName.text.toString(),
+                        email = email,
+                        firebaseUid = user.uid,
+                        nombres = reniecData?.nombres,
+                        apellidoPaterno = reniecData?.apellidoPaterno,
+                        apellidoMaterno = reniecData?.apellidoMaterno
+                    )
 
-                // Llamar al backend
-                val response = withContext(Dispatchers.IO) {
-                    RetrofitClient.apiService.registerAlumno(request)
-                }
+                    Log.d(TAG, "Enviando registro al backend: $request")
 
-                withContext(Dispatchers.Main) {
-                    showLoading(false)
+                    // Llamar al backend
+                    val response = withContext(Dispatchers.IO) {
+                        RetrofitClient.apiService.registerAlumno(request)
+                    }
 
-                    if (response.isSuccessful) {
-                        val body = response.body()
-                        if (body != null && body.success) {
-                            val userData = body.data
+                    withContext(Dispatchers.Main) {
+                        showLoading(false)
 
-                            Log.d(TAG, "Alumno registrado: ${userData?.email}, Rol: ${userData?.role}")
+                        if (response.isSuccessful) {
+                            val body = response.body()
+                            if (body != null && body.success) {
+                                val userData = body.data
 
-                            Toast.makeText(
-                                this@RegisterAlumnoActivity,
-                                "✅ Cuenta creada exitosamente",
-                                Toast.LENGTH_LONG
-                            ).show()
+                                Log.d(TAG, "Alumno registrado en backend: ${userData?.email}, Rol: ${userData?.role}")
 
-                            // Redirigir a DashboardAlumnosActivity
-                            val intent = Intent(this@RegisterAlumnoActivity, DashboardAlumnosActivity::class.java)
-                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                            startActivity(intent)
-                            finish()
+                                Toast.makeText(
+                                    this@RegisterAlumnoActivity,
+                                    "✅ Cuenta creada exitosamente",
+                                    Toast.LENGTH_LONG
+                                ).show()
+
+                                // Redirigir a DashboardAlumnosActivity
+                                val intent = Intent(this@RegisterAlumnoActivity, DashboardAlumnosActivity::class.java)
+                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                startActivity(intent)
+                                finish()
+                            } else {
+                                Toast.makeText(
+                                    this@RegisterAlumnoActivity,
+                                    "Error en el servidor: ${body?.message ?: "Respuesta vacía"}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                Log.e(TAG, "Respuesta del servidor sin éxito: $body")
+                            }
                         } else {
-                            Toast.makeText(
-                                this@RegisterAlumnoActivity,
-                                "Error: ${body?.message ?: "Respuesta vacía del servidor"}",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    } else {
-                        val errorBody = response.errorBody()?.string()
-                        val errorResponse = try {
-                            com.google.gson.Gson().fromJson(errorBody, ErrorResponse::class.java)
-                        } catch (e: Exception) {
-                            null
-                        }
+                            val errorBody = response.errorBody()?.string()
+                            Log.e(TAG, "Error response: $errorBody, Code: ${response.code()}")
 
-                        val errorMessage = errorResponse?.error ?: "Error en el registro (${response.code()})"
-                        Toast.makeText(this@RegisterAlumnoActivity, errorMessage, Toast.LENGTH_LONG).show()
-                        Log.e(TAG, "Error response: $errorBody")
+                            val errorMessage = when (response.code()) {
+                                400 -> "Datos inválidos en la solicitud"
+                                409 -> "El usuario ya existe en el sistema"
+                                500 -> "Error interno del servidor"
+                                else -> "Error en el registro (${response.code()})"
+                            }
+
+                            Toast.makeText(this@RegisterAlumnoActivity, errorMessage, Toast.LENGTH_LONG).show()
+
+                            // Intentar eliminar el usuario de Firebase si falla el registro en backend
+                            try {
+                                user.delete()
+                                Log.d(TAG, "Usuario de Firebase eliminado por fallo en backend")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error eliminando usuario de Firebase", e)
+                            }
+                        }
                     }
                 }
 
+            } catch (e: TimeoutCancellationException) {
+                withContext(Dispatchers.Main) {
+                    showLoading(false)
+                    Toast.makeText(
+                        this@RegisterAlumnoActivity,
+                        "Error: Tiempo de espera agotado. Verifica tu conexión.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    Log.e(TAG, "Timeout en registro de backend", e)
+                }
+            } catch (e: SocketTimeoutException) {
+                withContext(Dispatchers.Main) {
+                    showLoading(false)
+                    Toast.makeText(
+                        this@RegisterAlumnoActivity,
+                        "Error: El servidor no responde. Intenta más tarde.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    Log.e(TAG, "Socket timeout en registro de backend", e)
+                }
+            } catch (e: UnknownHostException) {
+                withContext(Dispatchers.Main) {
+                    showLoading(false)
+                    Toast.makeText(
+                        this@RegisterAlumnoActivity,
+                        "Error: No hay conexión a internet.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    Log.e(TAG, "No hay conexión a internet", e)
+                }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     showLoading(false)
-                    Log.e(TAG, "Error registrando alumno", e)
+                    Log.e(TAG, "Error registrando alumno en backend", e)
                     Toast.makeText(
                         this@RegisterAlumnoActivity,
-                        "Error de conexión: ${e.message}",
+                        "Error de conexión con el servidor: ${e.message}",
                         Toast.LENGTH_LONG
                     ).show()
                 }
