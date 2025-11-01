@@ -5,6 +5,19 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <!-- MOSTRAR ÁREA AUTOMÁTICA DEL DOCENTE -->
+    <TextView
+        android:id="@+id/tvAreaInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="Área: Cargando..."
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="#E8F5E8"
+        android:padding="12dp"
+        android:gravity="center" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -17,28 +30,10 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Selecciona las competencias que trabajarás en esta sesión de aprendizaje según el Currículo Nacional de la Educación Básica."
+        android:text="Selecciona las competencias que trabajarás en esta sesión de aprendizaje."
         android:textSize="14sp"
         android:textColor="@android:color/darker_gray"
         android:layout_marginBottom="16dp" />
-
-    <!-- ✅ AGREGAR EL SPINNER QUE FALTABA -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Filtrar por Área Curricular:"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="8dp" />
-
-    <Spinner
-        android:id="@+id/spinnerAreasDialog"
-        android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:layout_marginBottom="16dp"
-        android:background="@drawable/spinner_background_dialog"
-        android:padding="12dp"
-        android:popupBackground="@android:color/white" />
 
     <!-- Lista de competencias con scroll -->
     <TextView
@@ -61,7 +56,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="💡 Sugerencia: Selecciona solo las competencias que realmente desarrollarás en esta sesión."
+        android:text="💡 Las competencias se filtran automáticamente por tu área curricular."
         android:textSize="12sp"
         android:textColor="@android:color/darker_gray"
         android:background="#F0F8FF"

@@ -1,6 +1,7 @@
 package com.example.docentes
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -222,7 +223,10 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun verifyUserAndRedirect(token: String?) {
+        Log.d(TAG, "🔄 INICIANDO verifyUserAndRedirect - Token: ${token?.take(10)}...")
+
         if (token == null) {
+            Log.e(TAG, "❌ Token es null")
             Toast.makeText(this, "Error: No se pudo obtener el token", Toast.LENGTH_SHORT).show()
             return
         }
@@ -232,7 +236,10 @@ class LoginActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val user = auth.currentUser
+                Log.d(TAG, "👤 Usuario Firebase: ${user?.uid}")
+
                 if (user == null) {
+                    Log.e(TAG, "❌ Usuario Firebase es null")
                     withContext(Dispatchers.Main) {
                         showLoading(false)
                         Toast.makeText(
@@ -244,73 +251,55 @@ class LoginActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // Llamar al endpoint /api/auth/me
+                Log.d(TAG, "🌐 Llamando a /api/auth/me con UID: ${user.uid}")
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.apiService.getCurrentUser(user.uid)
                 }
+
+                Log.d(TAG, "📡 Respuesta del servidor - Código: ${response.code()}")
 
                 withContext(Dispatchers.Main) {
                     showLoading(false)
 
                     if (response.isSuccessful) {
                         val body = response.body()
+                        Log.d(TAG, "✅ Respuesta exitosa - Body: $body")
+
                         if (body != null && body.success && body.data != null) {
                             val userResponse = body.data
-
-                            Log.d(TAG, "Usuario verificado - Rol: ${userResponse.role}, Status: ${userResponse.status}")
+                            Log.d(TAG, "🎯 Usuario verificado - ID: ${userResponse.id}, Rol: ${userResponse.role}")
 
                             // Verificar que la cuenta esté activa
                             if (userResponse.status == "ACTIVE") {
-                                // Guardar datos del usuario en SharedPreferences
-                                saveUserData(userResponse)
+                                Log.d(TAG, "✅ Cuenta ACTIVA - Guardando datos...")
 
-                                // Redirigir según el rol
-                                when (userResponse.role) {
-                                    "DOCENTE" -> {
-                                        Log.d(TAG, "Redirigiendo a MainActivity (Docente)")
-                                        val intent = Intent(this@LoginActivity, MainActivity::class.java)
-                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                        startActivity(intent)
-                                        finish()
-                                    }
-                                    "ALUMNO" -> {
-                                        Log.d(TAG, "Redirigiendo a DashboardAlumnosActivity (Alumno)")
-                                        val intent = Intent(this@LoginActivity, DashboardAlumnosActivity::class.java)
-                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                        startActivity(intent)
-                                        finish()
-                                    }
-                                    "APODERADO" -> {
-                                        Log.d(TAG, "Redirigiendo a DashboardApoderadoActivity (Apoderado)")
-                                        val intent = Intent(this@LoginActivity, DashboardApoderadoActivity::class.java)
-                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                        startActivity(intent)
-                                        finish()
-                                    }
-                                    else -> {
-                                        // Rol no reconocido
+                                // ✅ ESPERAR a que termine de guardar los datos antes de redirigir
+                                lifecycleScope.launch {
+                                    val guardadoCompleto = saveUserDataAndWait(userResponse)
+                                    if (guardadoCompleto) {
+                                        Log.d(TAG, "✅ Todos los datos guardados - Redirigiendo...")
+                                        redirectUser(userResponse.role)
+                                    } else {
+                                        Log.e(TAG, "❌ Error guardando datos completos")
                                         Toast.makeText(
                                             this@LoginActivity,
-                                            "Rol no reconocido: ${userResponse.role}. Contacta al administrador.",
-                                            Toast.LENGTH_LONG
+                                            "Error guardando datos del usuario",
+                                            Toast.LENGTH_SHORT
                                         ).show()
-                                        auth.signOut()
-                                        googleSignInClient.signOut()
                                     }
                                 }
                             } else {
-                                // Cuenta no activa
+                                Log.w(TAG, "⚠️ Cuenta NO activa - Status: ${userResponse.status}")
                                 Toast.makeText(
                                     this@LoginActivity,
                                     "Tu cuenta está ${userResponse.status?.lowercase()}. Contacta al administrador.",
                                     Toast.LENGTH_LONG
                                 ).show()
-
-                                // Cerrar sesión
                                 auth.signOut()
                                 googleSignInClient.signOut()
                             }
                         } else {
+                            Log.e(TAG, "❌ Body inválido - Success: ${body?.success}, Data: ${body?.data}")
                             Toast.makeText(
                                 this@LoginActivity,
                                 "Error: ${body?.message ?: "Respuesta inválida del servidor"}",
@@ -318,6 +307,7 @@ class LoginActivity : AppCompatActivity() {
                             ).show()
                         }
                     } else {
+                        Log.e(TAG, "❌ Error del servidor - Código: ${response.code()}")
                         when (response.code()) {
                             401 -> {
                                 Toast.makeText(
@@ -330,7 +320,6 @@ class LoginActivity : AppCompatActivity() {
                             }
                             404 -> {
                                 // Usuario no encontrado en el backend pero sí en Firebase
-                                // Podría ser un usuario recién registrado que aún no se sincronizó
                                 Toast.makeText(
                                     this@LoginActivity,
                                     "Usuario no encontrado en el sistema. Intenta registrarte nuevamente.",
@@ -353,9 +342,9 @@ class LoginActivity : AppCompatActivity() {
                 }
 
             } catch (e: Exception) {
+                Log.e(TAG, "💥 Excepción en verifyUserAndRedirect", e)
                 withContext(Dispatchers.Main) {
                     showLoading(false)
-                    Log.e(TAG, "Error verificando usuario", e)
                     Toast.makeText(
                         this@LoginActivity,
                         "Error de conexión: ${e.message}",
@@ -366,39 +355,129 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveUserData(userResponse: com.example.docentes.models.UserResponse) {
-        val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
-        val editor = sharedPreferences.edit()
+    // ✅ NUEVO MÉTODO: Guardar datos y esperar a que termine
+    private suspend fun saveUserDataAndWait(userResponse: com.example.docentes.models.UserResponse): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+                val editor = sharedPreferences.edit()
 
-        editor.putInt("user_id", userResponse.id)
-        editor.putString("user_email", userResponse.email)
-        editor.putString("user_role", userResponse.role)
-        editor.putString("user_status", userResponse.status)
-        editor.putString("user_firebase_uid", auth.currentUser?.uid)
+                editor.putInt("user_id", userResponse.id)
+                editor.putString("user_email", userResponse.email)
+                editor.putString("user_role", userResponse.role)
+                editor.putString("user_status", userResponse.status)
+                editor.putString("user_firebase_uid", auth.currentUser?.uid)
 
-        // Guardar datos del perfil de manera genérica
-        val profileData = userResponse.profileData
-        if (profileData != null) {
-            editor.putString("user_full_name", profileData["full_name"] as? String)
-            editor.putString("user_dni", profileData["dni"] as? String)
+                // Guardar datos del perfil de manera genérica
+                val profileData = userResponse.profileData
+                if (profileData != null) {
+                    Log.d(TAG, "📊 ProfileData recibido: $profileData")
 
-            // Para docentes
-            editor.putInt("user_area_id", (profileData["area_id"] as? Double)?.toInt() ?: 0)
-            editor.putString("user_employee_code", profileData["employee_code"] as? String)
+                    editor.putString("user_full_name", profileData["full_name"] as? String)
+                    editor.putString("user_dni", profileData["dni"] as? String)
 
-            // Para alumnos
-            editor.putString("user_nombres", profileData["nombres"] as? String)
-            editor.putString("user_apellido_paterno", profileData["apellido_paterno"] as? String)
-            editor.putString("user_apellido_materno", profileData["apellido_materno"] as? String)
+                    // Para docentes - verificar qué datos llegan
+                    val areaId = profileData["area_id"] as? Double
+                    var areaNombre = profileData["area_nombre"] as? String
+                    val areaIdInt = areaId?.toInt() ?: 0
 
-            // Para apoderados
-            editor.putString("user_phone", profileData["phone"] as? String)
-            editor.putString("user_relationship_type", profileData["relationship_type"] as? String)
+                    Log.d(TAG, "🏫 Datos del área - ID: $areaIdInt, Nombre: $areaNombre")
+
+                    // ✅ MEJORADO: Si no viene el nombre del área, obtenerlo del servidor
+                    if (areaIdInt > 0 && areaNombre.isNullOrEmpty()) {
+                        Log.d(TAG, "🔄 Obteniendo nombre del área desde el servidor...")
+                        areaNombre = obtenerNombreAreaYEsperar(areaIdInt)
+                    }
+
+                    editor.putInt("user_area_id", areaIdInt)
+                    editor.putString("user_area_name", areaNombre ?: "")
+                    Log.d(TAG, "💾 Guardando área: ID $areaIdInt, Nombre: ${areaNombre ?: "NO_OBTENIDO"}")
+
+                    // Guardar el resto de datos
+                    editor.putString("user_employee_code", profileData["employee_code"] as? String)
+                    editor.putString("user_nombres", profileData["nombres"] as? String)
+                    editor.putString("user_apellido_paterno", profileData["apellido_paterno"] as? String)
+                    editor.putString("user_apellido_materno", profileData["apellido_materno"] as? String)
+                    editor.putString("user_phone", profileData["phone"] as? String)
+                    editor.putString("user_relationship_type", profileData["relationship_type"] as? String)
+                } else {
+                    Log.w(TAG, "❌ ProfileData es null")
+                }
+
+                // ✅ APLICAR los cambios y esperar a que termine
+                editor.apply()
+
+                // Verificar que se guardó correctamente
+                val savedAreaId = sharedPreferences.getInt("user_area_id", -1)
+                val savedAreaName = sharedPreferences.getString("user_area_name", "NO_GUARDADO")
+                Log.d(TAG, "💾 Verificación - Área ID: $savedAreaId, Área Nombre: $savedAreaName")
+
+                true // Indicar que se guardó correctamente
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error en saveUserDataAndWait", e)
+                false // Indicar error
+            }
         }
+    }
 
-        editor.apply()
+    // ✅ NUEVO MÉTODO: Obtener nombre del área y esperar
+    private suspend fun obtenerNombreAreaYEsperar(areaId: Int): String? {
+        return try {
+            Log.d(TAG, "🌐 Solicitando área con ID: $areaId")
 
-        Log.d(TAG, "Datos del usuario guardados en SharedPreferences - Rol: ${userResponse.role}")
+            // ✅ TIPO EXPLÍCITO
+            val area: com.example.docentes.models.Area = withContext(Dispatchers.IO) {
+                RetrofitClient.curriculumApiService.getArea(areaId)
+            }
+
+            val areaNombre: String = area.nombre
+            Log.d(TAG, "✅ Área obtenida: $areaNombre")
+            areaNombre
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error obteniendo el área", e)
+            null
+        }
+    }
+
+    // ✅ MÉTODO SEPARADO para redirección
+    private fun redirectUser(role: String) {
+        Log.d(TAG, "🔄 Redirigiendo según rol: $role")
+
+        when (role) {
+            "DOCENTE" -> {
+                Log.d(TAG, "🎯 Redirigiendo a MainActivity (Docente)")
+                val intent = Intent(this@LoginActivity, MainActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                startActivity(intent)
+                finish()
+            }
+            "ALUMNO" -> {
+                Log.d(TAG, "🎯 Redirigiendo a DashboardAlumnosActivity (Alumno)")
+                val intent = Intent(this@LoginActivity, DashboardAlumnosActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                startActivity(intent)
+                finish()
+            }
+            "APODERADO" -> {
+                Log.d(TAG, "🎯 Redirigiendo a DashboardApoderadoActivity (Apoderado)")
+                val intent = Intent(this@LoginActivity, DashboardApoderadoActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                startActivity(intent)
+                finish()
+            }
+            else -> {
+                Log.e(TAG, "❌ Rol no reconocido: $role")
+                Toast.makeText(
+                    this@LoginActivity,
+                    "Rol no reconocido: $role. Contacta al administrador.",
+                    Toast.LENGTH_LONG
+                ).show()
+                auth.signOut()
+                googleSignInClient.signOut()
+            }
+        }
     }
 
     private fun showLoading(show: Boolean) {

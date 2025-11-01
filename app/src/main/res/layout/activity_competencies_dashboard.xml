@@ -27,8 +27,44 @@
         android:orientation="vertical"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-        <!-- Buscador y filtros -->
+        <!-- Información del área automática -->
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardAreaInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="16dp"
+            app:cardElevation="2dp"
+            app:cardCornerRadius="8dp"
+            app:cardBackgroundColor="#E8F5E8">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="16dp"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📚"
+                    android:textSize="20sp"
+                    android:layout_marginEnd="12dp" />
+
+                <TextView
+                    android:id="@+id/tvAreaInfo"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Área: Cargando..."
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Buscador y filtros (solo para ADMIN) -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardFiltroArea"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_margin="16dp"
@@ -57,7 +93,7 @@
                         android:maxLines="1" />
                 </com.google.android.material.textfield.TextInputLayout>
 
-                <!-- Filtro por área -->
+                <!-- Filtro por área (solo ADMIN) -->
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -113,6 +149,19 @@
                     android:textStyle="bold" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+
+        <!-- ✅ ESTADO VACÍO -->
+        <TextView
+            android:id="@+id/tvEmptyState"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="No hay competencias en esta sesión.\n\nToca el botón de abajo para agregar competencias de tu área."
+            android:textSize="16sp"
+            android:textColor="@android:color/darker_gray"
+            android:padding="32dp"
+            android:visibility="gone" />
 
         <!-- Lista expandible de competencias -->
         <androidx.swiperefreshlayout.widget.SwipeRefreshLayout

@@ -1,11 +1,14 @@
 package com.example.docentes
 
+import android.content.SharedPreferences
+import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -22,6 +25,9 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import androidx.core.graphics.toColorInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class CompetenciesDashboardActivity : AppCompatActivity() {
 
@@ -46,13 +52,30 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
     private var competencyAbilities: Map<Int, List<Ability>> = emptyMap()
     private var abilityCriteria: Map<Int, List<Criterion>> = emptyMap()
 
+    private lateinit var tvEmptyState: TextView
+
+    // Datos del usuario
+    private lateinit var sharedPreferences: SharedPreferences
+    private var userAreaId: Int = 0
+    private var userRole: String = ""
+    private var userAreaName: String = ""
+
     // Estados de expansión
     private var expandedCompetencyId: Int? = null
     private var expandedAbilityId: Int? = null
 
+    private lateinit var tvAreaInfo: TextView
+    private lateinit var cardAreaInfo: MaterialCardView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_competencies_dashboard)
+
+        // Obtener datos del usuario
+        sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        userAreaId = sharedPreferences.getInt("user_area_id", 0)
+        userRole = sharedPreferences.getString("user_role", "") ?: ""
+        userAreaName = sharedPreferences.getString("user_area_name", "") ?: ""
 
         initViews()
         sessionId = intent.getIntExtra("SESSION_ID", -1)
@@ -69,7 +92,30 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
         setupSwipeRefresh()
         setupSearchAndFilters()
         setupButtons()
+
+        // ✅ ACTUALIZAR EL ÁREA INMEDIATAMENTE
+        updateAreaInfo()
+
         loadInitialData()
+    }
+
+    private fun setupAreaInfo(tvAreaInfo: TextView) {
+        when {
+            userRole == "ADMIN" -> {
+                tvAreaInfo.text = "👑 Modo ADMIN - Todas las áreas disponibles"
+                tvAreaInfo.setBackgroundColor(Color.parseColor("#E3F2FD"))
+            }
+
+            userRole == "DOCENTE" && userAreaName.isNotEmpty() -> {
+                tvAreaInfo.text = "📚 Tu área: $userAreaName"
+                tvAreaInfo.setBackgroundColor(Color.parseColor("#E8F5E8"))
+            }
+
+            else -> {
+                tvAreaInfo.text = "⚠️ Área no asignada"
+                tvAreaInfo.setBackgroundColor(Color.parseColor("#FFEBEE"))
+            }
+        }
     }
 
     private fun initViews() {
@@ -80,13 +126,49 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
         swipeRefresh = findViewById(R.id.swipeRefresh)
         rvCompetencies = findViewById(R.id.rvCompetencies)
         progressBar = findViewById(R.id.progressBar)
+
+        // ✅ INICIALIZAR las nuevas vistas
+        tvAreaInfo = findViewById(R.id.tvAreaInfo)
+        cardAreaInfo = findViewById(R.id.cardAreaInfo)
+
+        // ✅ INICIALIZAR vista de estado vacío
+        tvEmptyState = findViewById(R.id.tvEmptyState)
     }
 
     private fun setupToolbar() {
-        toolbar.title = "Competencias - $sessionTitle"
+        val areaInfo = if (userAreaName.isNotEmpty()) " - $userAreaName" else ""
+        toolbar.title = "Competencias$areaInfo - $sessionTitle"
         toolbar.setNavigationOnClickListener {
             finish()
         }
+    }
+
+    private fun updateAreaInfo() {
+        Log.d(TAG, "🔍 Actualizando información del área - Rol: $userRole, Área: '$userAreaName'")
+
+        when {
+            userRole == "ADMIN" -> {
+                tvAreaInfo.text = "👑 Modo ADMIN - Todas las áreas disponibles"
+                cardAreaInfo.setCardBackgroundColor(Color.parseColor("#E3F2FD"))
+            }
+
+            userRole == "DOCENTE" && userAreaId > 0 && userAreaName.isNotEmpty() -> {
+                tvAreaInfo.text = "📚 Tu área: $userAreaName"
+                cardAreaInfo.setCardBackgroundColor(Color.parseColor("#E8F5E8"))
+            }
+
+            userRole == "DOCENTE" && (userAreaId == 0 || userAreaName.isEmpty()) -> {
+                tvAreaInfo.text = "⚠️ Área no asignada - Contacta al administrador"
+                cardAreaInfo.setCardBackgroundColor(Color.parseColor("#FFEBEE"))
+            }
+
+            else -> {
+                tvAreaInfo.text = "Rol: $userRole - Sin área"
+                cardAreaInfo.setCardBackgroundColor(Color.parseColor("#FFF3E0"))
+            }
+        }
+
+        cardAreaInfo.visibility = View.VISIBLE
     }
 
     private fun setupRecyclerView() {
@@ -125,6 +207,9 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
         )
         rvCompetencies.layoutManager = LinearLayoutManager(this)
         rvCompetencies.adapter = adapter
+
+        // ✅ MOSTRAR ESTADO VACÍO INICIAL
+        showEmptyState(true, "Cargando competencias...")
     }
 
     private fun setupSwipeRefresh() {
@@ -134,6 +219,9 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
     }
 
     private fun setupSearchAndFilters() {
+        // Configurar spinner de áreas basado en el rol del usuario
+        setupAreaSpinner()
+
         etBuscarCompetencias.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -151,30 +239,62 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
 
     private fun loadInitialData() {
         progressBar.visibility = View.VISIBLE
+        showEmptyState(true, "Cargando competencias...")
 
         lifecycleScope.launch {
             try {
-                val areasDeferred = async { RetrofitClient.curriculumApiService.getAreas() }
+                // Cargar áreas (solo necesarias para ADMIN)
+                val areasDeferred = async {
+                    if (userRole == "ADMIN") {
+                        RetrofitClient.curriculumApiService.getAreas()
+                    } else {
+                        emptyList()
+                    }
+                }
+
+                // ✅ Cargar competencias según el rol del usuario
                 val competenciasTemplateDeferred = async {
-                    RetrofitClient.curriculumApiService.getAllCompetencias()
+                    if (userRole == "ADMIN") {
+                        // ADMIN: Usar el endpoint /competencias que ya tiene area_id y area_nombre
+                        RetrofitClient.curriculumApiService.getAllCompetencias()
+                    } else {
+                        // DOCENTE: Obtener competencias de su área
+                        if (userAreaId > 0) {
+                            val area: Area = RetrofitClient.curriculumApiService.getArea(userAreaId)
+                            val competenciasDetalladas: List<CompetenciaDetallada> =
+                                RetrofitClient.curriculumApiService.getCompetenciasByArea(userAreaId)
+
+                            // ✅ Convertir CompetenciaDetallada a CompetenciaTemplate
+                            competenciasDetalladas.map { comp ->
+                                CompetenciaTemplate(
+                                    id = comp.id,
+                                    nombre = comp.nombre,
+                                    area_id = area.id,
+                                    area_nombre = area.nombre
+                                )
+                            }
+                        } else {
+                            emptyList()
+                        }
+                    }
                 }
 
                 areas = areasDeferred.await()
                 todasCompetenciasTemplate = competenciasTemplateDeferred.await()
 
-                Log.d(TAG, "Areas cargadas: ${areas.size}")
-                Log.d(TAG, "Competencias template: ${todasCompetenciasTemplate.size}")
+                Log.d(TAG, "📊 Datos cargados - Áreas: ${areas.size}, Competencias: ${todasCompetenciasTemplate.size}")
 
-                setupAreaSpinner()
+                // ✅ CARGAR COMPETENCIAS DE LA SESIÓN
                 loadCompetencies()
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading initial data", e)
+                Log.e(TAG, "❌ Error loading initial data", e)
                 Toast.makeText(
                     this@CompetenciesDashboardActivity,
                     "Error al cargar datos: ${e.message}",
                     Toast.LENGTH_LONG
                 ).show()
+                showEmptyState(true, "Error al cargar competencias")
             } finally {
                 progressBar.visibility = View.GONE
             }
@@ -182,21 +302,41 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
     }
 
     private fun setupAreaSpinner() {
-        val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
-        val spinnerAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            areasWithAll.map { it.nombre }
-        )
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerAreas.adapter = spinnerAdapter
+        // Si el usuario es ADMIN, mostrar todas las áreas
+        // Si es DOCENTE, mostrar solo su área
+        if (userRole == "ADMIN") {
+            // ADMIN puede ver todas las áreas
+            val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
+            val spinnerAdapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_item,
+                areasWithAll.map { it.nombre }
+            )
+            spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinnerAreas.adapter = spinnerAdapter
 
-        spinnerAreas.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                filterCompetencies()
+            spinnerAreas.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    filterCompetencies()
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
             }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+
+            // Mostrar la sección de filtros para ADMIN
+            findViewById<com.google.android.material.card.MaterialCardView>(R.id.cardFiltroArea)?.visibility = View.VISIBLE
+        } else {
+            // Para DOCENTE: OCULTAR completamente la sección de filtro
+            findViewById<com.google.android.material.card.MaterialCardView>(R.id.cardFiltroArea)?.visibility = View.GONE
         }
+    }
+
+    private fun setupCompetenciesRecyclerView(rvCompetenciasDialog: RecyclerView) {
+        val selectionAdapter = CompetenciasTemplateAdapter(
+            competencias = todasCompetenciasTemplate,
+            onSelectionChanged = { /* manejar selección */ }
+        )
+        rvCompetenciasDialog.layoutManager = LinearLayoutManager(this)
+        rvCompetenciasDialog.adapter = selectionAdapter
     }
 
     private fun loadCompetencies() {
@@ -204,32 +344,44 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
+                Log.d(TAG, "🔄 Cargando competencias para sesión ID: $sessionId")
                 competenciasActuales = RetrofitClient.apiService.getCompetencies(sessionId)
-                Log.d(TAG, "Competencias actuales: ${competenciasActuales.size}")
+                Log.d(TAG, "✅ Competencias cargadas: ${competenciasActuales.size}")
 
                 competencyAbilities = emptyMap()
                 abilityCriteria = emptyMap()
 
                 updateAdapter()
 
+                // ✅ ACTUALIZAR ESTADO VACÍO
                 if (competenciasActuales.isEmpty()) {
-                    Toast.makeText(
-                        this@CompetenciesDashboardActivity,
-                        "No hay competencias. Agrega una del catálogo.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    showEmptyState(true, "No hay competencias en esta sesión.\n\nToca el botón de abajo para agregar competencias de tu área.")
+                } else {
+                    showEmptyState(false, "")
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading competencies", e)
+                Log.e(TAG, "❌ Error loading competencies", e)
                 Toast.makeText(
                     this@CompetenciesDashboardActivity,
                     "Error al cargar competencias: ${e.message}",
                     Toast.LENGTH_LONG
                 ).show()
+                showEmptyState(true, "Error al cargar competencias")
             } finally {
                 swipeRefresh.isRefreshing = false
             }
+        }
+    }
+
+    private fun showEmptyState(show: Boolean, message: String) {
+        if (show) {
+            tvEmptyState.text = message
+            tvEmptyState.visibility = View.VISIBLE
+            rvCompetencies.visibility = View.GONE
+        } else {
+            tvEmptyState.visibility = View.GONE
+            rvCompetencies.visibility = View.VISIBLE
         }
     }
 
@@ -242,8 +394,14 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                     competency.name.lowercase().contains(searchText) ||
                     competency.description?.lowercase()?.contains(searchText) == true
 
-            val matchesArea = selectedAreaPosition == 0 ||
-                    competency.description?.contains(areas[selectedAreaPosition - 1].nombre) == true
+            // Para ADMIN: filtrar por área seleccionada
+            // Para DOCENTE: no filtrar por área (solo tiene una)
+            val matchesArea = if (userRole == "ADMIN") {
+                selectedAreaPosition == 0 || // "Todas las áreas"
+                        competency.description?.contains(areas[selectedAreaPosition - 1].nombre) == true
+            } else {
+                true // DOCENTE siempre ve todas sus competencias
+            }
 
             matchesSearch && matchesArea
         }
@@ -258,6 +416,15 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
             newCriteria = abilityCriteria,
             keepExpanded = true
         )
+
+        // ✅ ACTUALIZAR ESTADO VACÍO PARA FILTROS
+        if (filteredCompetencies.isEmpty() && competenciasActuales.isNotEmpty()) {
+            showEmptyState(true, "No se encontraron competencias que coincidan con tu búsqueda.")
+        } else if (filteredCompetencies.isEmpty()) {
+            showEmptyState(true, "No hay competencias en esta sesión.\n\nToca el botón de abajo para agregar competencias de tu área.")
+        } else {
+            showEmptyState(false, "")
+        }
     }
 
     private fun updateAdapter() {
@@ -273,8 +440,9 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
     private fun loadAbilitiesForCompetency(competencyId: Int) {
         lifecycleScope.launch {
             try {
+                Log.d(TAG, "🔄 Cargando capacidades para competencia: $competencyId")
                 val abilities = RetrofitClient.apiService.getAbilities(competencyId)
-                Log.d(TAG, "Abilities loaded for competency $competencyId: ${abilities.size}")
+                Log.d(TAG, "✅ Capacidades cargadas: ${abilities.size}")
 
                 competencyAbilities = competencyAbilities.toMutableMap().apply {
                     put(competencyId, abilities)
@@ -283,7 +451,7 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                 updateAdapter()
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading abilities for competency $competencyId", e)
+                Log.e(TAG, "❌ Error loading abilities for competency $competencyId", e)
                 Toast.makeText(
                     this@CompetenciesDashboardActivity,
                     "Error al cargar capacidades: ${e.message}",
@@ -296,8 +464,9 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
     private fun loadCriteriaForAbility(abilityId: Int) {
         lifecycleScope.launch {
             try {
+                Log.d(TAG, "🔄 Cargando criterios para capacidad: $abilityId")
                 val criteria = RetrofitClient.apiService.getCriteria(abilityId)
-                Log.d(TAG, "Criteria loaded for ability $abilityId: ${criteria.size}")
+                Log.d(TAG, "✅ Criterios cargados: ${criteria.size}")
 
                 abilityCriteria = abilityCriteria.toMutableMap().apply {
                     put(abilityId, criteria)
@@ -306,7 +475,7 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                 updateAdapter()
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading criteria for ability $abilityId", e)
+                Log.e(TAG, "❌ Error loading criteria for ability $abilityId", e)
                 Toast.makeText(
                     this@CompetenciesDashboardActivity,
                     "Error al cargar criterios: ${e.message}",
@@ -319,45 +488,59 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
     private fun showSelectCompetencyDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_select_competencies, null)
         val rvCompetenciasDialog = dialogView.findViewById<RecyclerView>(R.id.rvCompetenciasDialog)
-        val spinnerAreasDialog = dialogView.findViewById<Spinner>(R.id.spinnerAreasDialog)
-        val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
-        val spinnerAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            areasWithAll.map { it.nombre }
-        )
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerAreasDialog.adapter = spinnerAdapter
-        val selectionAdapter = CompetenciasTemplateAdapter(
-            competencias = todasCompetenciasTemplate,
-            onSelectionChanged = { selectedCompetencias ->
-                // Manejar selección
+        val tvAreaInfoDialog = dialogView.findViewById<TextView>(R.id.tvAreaInfo)
+
+        // Configurar según el rol del usuario
+        if (userRole == "ADMIN") {
+            // ADMIN puede seleccionar entre todas las áreas - usar un diálogo diferente o adaptar
+            tvAreaInfoDialog.text = "👑 Modo ADMIN - Todas las áreas disponibles"
+            tvAreaInfoDialog.setBackgroundColor(Color.parseColor("#E3F2FD"))
+
+            // Para ADMIN, mostrar todas las competencias sin filtro por área en el diálogo
+            // o podrías crear un layout alternativo con spinner para ADMIN
+            val selectionAdapter = CompetenciasTemplateAdapter(
+                competencias = todasCompetenciasTemplate,
+                onSelectionChanged = { /* manejar selección */ }
+            )
+            rvCompetenciasDialog.layoutManager = LinearLayoutManager(this)
+            rvCompetenciasDialog.adapter = selectionAdapter
+
+        } else {
+            // DOCENTE solo ve competencias de su área
+            tvAreaInfoDialog.text = "Área: $userAreaName"
+            tvAreaInfoDialog.setBackgroundColor(Color.parseColor("#E8F5E8"))
+
+            // Filtrar competencias solo para el área del docente
+            val competenciasDelArea = if (userAreaId > 0) {
+                todasCompetenciasTemplate.filter { it.area_id == userAreaId }
+            } else {
+                emptyList()
             }
-        )
-        rvCompetenciasDialog.layoutManager = LinearLayoutManager(this)
-        rvCompetenciasDialog.adapter = selectionAdapter
+
+            val selectionAdapter = CompetenciasTemplateAdapter(
+                competencias = competenciasDelArea,
+                onSelectionChanged = { /* manejar selección */ }
+            )
+            rvCompetenciasDialog.layoutManager = LinearLayoutManager(this)
+            rvCompetenciasDialog.adapter = selectionAdapter
+
+            // Mostrar mensaje si no hay competencias para el área
+            if (competenciasDelArea.isEmpty()) {
+                Toast.makeText(this,
+                    "No hay competencias disponibles para tu área ($userAreaName)",
+                    Toast.LENGTH_LONG).show()
+            }
+        }
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .setPositiveButton("Agregar Seleccionadas") { _, _ ->
-                val selected = selectionAdapter.getSelectedCompetencias()
+                val selectionAdapter = rvCompetenciasDialog.adapter as? CompetenciasTemplateAdapter
+                val selected = selectionAdapter?.getSelectedCompetencias() ?: emptyList()
                 addSelectedCompetencies(selected)
             }
             .setNegativeButton("Cancelar", null)
             .create()
-
-        spinnerAreasDialog.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedArea = areasWithAll[position]
-                val filtered = if (selectedArea.id == 0) {
-                    todasCompetenciasTemplate
-                } else {
-                    todasCompetenciasTemplate.filter { it.area_id == selectedArea.id }
-                }
-                selectionAdapter.updateCompetencias(filtered)
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
 
         dialog.show()
     }
@@ -398,7 +581,7 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                 var savedCount = 0
                 var errorCount = 0
 
-                for (competencia in competenciasNuevas) { // ← Solo las nuevas
+                for (competencia in competenciasNuevas) {
                     try {
                         val request = NewCompetencyRequest(
                             name = competencia.nombre,
@@ -406,10 +589,10 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                         )
                         RetrofitClient.apiService.createCompetency(sessionId, request)
                         savedCount++
-                        Log.d(TAG, "Competencia guardada: ${competencia.nombre}")
+                        Log.d(TAG, "✅ Competencia guardada: ${competencia.nombre}")
                     } catch (e: Exception) {
                         errorCount++
-                        Log.e(TAG, "Error guardando competencia: ${competencia.nombre}", e)
+                        Log.e(TAG, "❌ Error guardando competencia: ${competencia.nombre}", e)
                     }
                 }
 
@@ -425,11 +608,12 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                 Toast.makeText(this@CompetenciesDashboardActivity, message, Toast.LENGTH_LONG).show()
 
                 if (savedCount > 0) {
+                    // ✅ RECARGAR LAS COMPETENCIAS DESPUÉS DE AGREGAR
                     loadCompetencies()
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error general guardando competencias", e)
+                Log.e(TAG, "❌ Error general guardando competencias", e)
                 Toast.makeText(
                     this@CompetenciesDashboardActivity,
                     "Error: ${e.message}",
@@ -451,30 +635,39 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                     return@launch
                 }
 
+                // ✅ Buscar la competencia en el catálogo usando el ID
                 val competenciaTemplate = todasCompetenciasTemplate.find {
-                    it.nombre == competencia.name
+                    it.nombre.equals(competencia.name, ignoreCase = true)
                 }
 
                 if (competenciaTemplate == null) {
                     Toast.makeText(this@CompetenciesDashboardActivity,
-                        "No se encontraron capacidades en el catálogo", Toast.LENGTH_SHORT).show()
+                        "No se encontró esta competencia en el catálogo", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
 
-                val capacidades = RetrofitClient.curriculumApiService
-                    .getCapacidadesByCompetencia(competenciaTemplate.id)
+                // ✅ Obtener capacidades desde el endpoint detallado
+                val capacidades = withContext(Dispatchers.IO) {
+                    RetrofitClient.curriculumApiService.getCapacidadesByCompetencia(competenciaTemplate.id)
+                }
+
+                if (capacidades.isEmpty()) {
+                    Toast.makeText(this@CompetenciesDashboardActivity,
+                        "No hay capacidades disponibles para esta competencia", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
 
                 showCapacidadesSelectionDialog(competencyId, capacidades)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading capacidades", e)
+                Log.e(TAG, "❌ Error loading capacidades", e)
                 Toast.makeText(this@CompetenciesDashboardActivity,
                     "Error al cargar capacidades: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    private fun showCapacidadesSelectionDialog(competencyId: Int, capacidades: List<Capacidad>) {
+    private fun showCapacidadesSelectionDialog(competencyId: Int, capacidades: List<CapacidadDetallada>) {
         val capacidadNames = capacidades.map { it.nombre }.toTypedArray()
         val selectedItems = BooleanArray(capacidades.size)
 
@@ -493,7 +686,7 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun addSelectedCapacidades(competencyId: Int, capacidades: List<Capacidad>) {
+    private fun addSelectedCapacidades(competencyId: Int, capacidades: List<CapacidadDetallada>) {
         if (capacidades.isEmpty()) {
             Toast.makeText(this, "Selecciona al menos una capacidad", Toast.LENGTH_SHORT).show()
             return
@@ -538,18 +731,18 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                 var savedCount = 0
                 var errorCount = 0
 
-                for (capacidad in capacidadesNuevas) { // ← Solo las nuevas
+                for (capacidad in capacidadesNuevas) {
                     try {
                         val request = mapOf(
                             "name" to capacidad.nombre,
-                            "description" to "Capacidad curricular"
+                            "description" to (capacidad.descripcion ?: "Capacidad curricular")
                         )
                         RetrofitClient.apiService.createAbility(competencyId, request)
                         savedCount++
-                        Log.d(TAG, "Capacidad guardada: ${capacidad.nombre}")
+                        Log.d(TAG, "✅ Capacidad guardada: ${capacidad.nombre}")
                     } catch (e: Exception) {
                         errorCount++
-                        Log.e(TAG, "Error guardando capacidad: ${capacidad.nombre}", e)
+                        Log.e(TAG, "❌ Error guardando capacidad: ${capacidad.nombre}", e)
                     }
                 }
 
@@ -569,7 +762,7 @@ class CompetenciesDashboardActivity : AppCompatActivity() {
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error general guardando capacidades", e)
+                Log.e(TAG, "❌ Error general guardando capacidades", e)
                 Toast.makeText(this@CompetenciesDashboardActivity,
                     "Error: ${e.message}", Toast.LENGTH_LONG).show()
             } finally {

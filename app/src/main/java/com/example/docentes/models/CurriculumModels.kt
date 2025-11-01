@@ -7,14 +7,45 @@ data class Area(
     val id: Int,
 
     @SerializedName("nombre")
-    val nombre: String,
+    val nombre: String,  // ✅ ASEGÚRATE DE QUE ESTE CAMPO EXISTE
 
     @SerializedName("description")
     val description: String? = null,
 
     @SerializedName("color")
-    val color: String? = null
+    val color: String? = null,
+
+    @SerializedName("competencias")
+    val competencias: List<CompetenciaDetallada>? = null
 )
+
+// ✅ Modelo para competencias que vienen de la API (con descripción y capacidades)
+data class CompetenciaDetallada(
+    @SerializedName("id")
+    val id: Int,
+
+    @SerializedName("nombre")
+    val nombre: String,
+
+    @SerializedName("descripcion")
+    val descripcion: String? = null,
+
+    @SerializedName("capacidades")
+    val capacidades: List<CapacidadDetallada>? = null
+)
+
+// ✅ Modelo para capacidades anidadas en competencias
+data class CapacidadDetallada(
+    @SerializedName("id")
+    val id: Int,
+
+    @SerializedName("nombre")
+    val nombre: String,
+
+    @SerializedName("descripcion")
+    val descripcion: String? = null
+)
+
 
 data class CompetenciaTemplate(
     @SerializedName("id")

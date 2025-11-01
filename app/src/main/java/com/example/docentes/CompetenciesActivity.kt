@@ -1,5 +1,7 @@
 package com.example.docentes
 
+import android.content.SharedPreferences
+import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -15,8 +17,10 @@ import com.example.docentes.network.RetrofitClient
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
 
 class CompetenciesActivity : AppCompatActivity() {
 
@@ -39,12 +43,23 @@ class CompetenciesActivity : AppCompatActivity() {
     private var todasCompetencias: List<CompetenciaTemplate> = emptyList()
     private var competenciasExistentes: List<Competency> = emptyList()
 
+    // Datos del usuario
+    private lateinit var sharedPreferences: SharedPreferences
+    private var userAreaId: Int = 0
+    private var userRole: String = ""
+    private var userAreaName: String = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_competencies)
 
+        // Obtener datos del usuario
+        sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
+        userAreaId = sharedPreferences.getInt("user_area_id", 0)
+        userRole = sharedPreferences.getString("user_role", "") ?: ""
+        userAreaName = sharedPreferences.getString("user_area_name", "") ?: ""
+
         toolbar = findViewById(R.id.toolbar)
-        spinnerAreas = findViewById(R.id.spinnerAreas)
         swipeRefresh = findViewById(R.id.swipeRefresh)
         rvCompetencias = findViewById(R.id.rvCompetencias)
         tvSelectedCount = findViewById(R.id.tvSelectedCount)
@@ -65,10 +80,21 @@ class CompetenciesActivity : AppCompatActivity() {
         setupSwipeRefresh()
         setupButtons()
         loadInitialData()
+        setupAreaInfo()
+    }
+    private fun setupAreaInfo() {
+        val tvAreaInfo = findViewById<TextView>(R.id.tvAreaInfo)
+        if (userAreaName.isNotEmpty()) {
+            tvAreaInfo.text = "Área: $userAreaName"
+        } else {
+            tvAreaInfo.text = "Área: No asignada"
+            tvAreaInfo.setBackgroundColor(Color.parseColor("#FFEBEE")) // Color de advertencia
+        }
     }
 
     private fun setupToolbar() {
-        toolbar.title = "Competencias - $sessionTitle"
+        val areaInfo = if (userAreaName.isNotEmpty()) " - $userAreaName" else ""
+        toolbar.title = "Competencias$areaInfo - $sessionTitle"
         toolbar.setNavigationOnClickListener {
             finish()
         }
@@ -102,7 +128,15 @@ class CompetenciesActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val areasDeferred = async { RetrofitClient.curriculumApiService.getAreas() }
+                // Cargar áreas solo si es ADMIN
+                val areasDeferred = async {
+                    if (userRole == "ADMIN") {
+                        RetrofitClient.curriculumApiService.getAreas()
+                    } else {
+                        emptyList()
+                    }
+                }
+
                 val competenciasExistentesDeferred = async {
                     RetrofitClient.apiService.getCompetencies(sessionId)
                 }
@@ -110,7 +144,8 @@ class CompetenciesActivity : AppCompatActivity() {
                 areas = areasDeferred.await()
                 competenciasExistentes = competenciasExistentesDeferred.await()
 
-                Log.d(TAG, "Areas cargadas: ${areas.size}")
+                Log.d(TAG, "Rol del usuario: $userRole")
+                Log.d(TAG, "Área del usuario: $userAreaId - $userAreaName")
                 Log.d(TAG, "Competencias existentes: ${competenciasExistentes.size}")
 
                 setupAreaSpinner()
@@ -132,11 +167,56 @@ class CompetenciesActivity : AppCompatActivity() {
     private fun loadAllCompetencias() {
         lifecycleScope.launch {
             try {
-                todasCompetencias = RetrofitClient.curriculumApiService.getAllCompetencias()
-                Log.d(TAG, "Todas las competencias cargadas: ${todasCompetencias.size}")
+                // Cargar competencias según el rol del usuario
+                todasCompetencias = if (userRole == "ADMIN") {
+                    // ADMIN: Usar el endpoint /competencias que ya devuelve area_id y area_nombre
+                    withContext(Dispatchers.IO) {
+                        RetrofitClient.curriculumApiService.getAllCompetencias()
+                    }
+                } else {
+                    // DOCENTE: Obtener competencias de su área
+                    if (userAreaId > 0) {
+                        withContext(Dispatchers.IO) {
+                            // ✅ Primero obtener el área para tener su nombre
+                            val area: Area = RetrofitClient.curriculumApiService.getArea(userAreaId)
+
+                            // ✅ Luego obtener las competencias del área
+                            val competenciasDetalladas: List<CompetenciaDetallada> =
+                                RetrofitClient.curriculumApiService.getCompetenciasByArea(userAreaId)
+
+                            // ✅ Convertir CompetenciaDetallada a CompetenciaTemplate
+                            competenciasDetalladas.map { comp ->
+                                CompetenciaTemplate(
+                                    id = comp.id,
+                                    nombre = comp.nombre,
+                                    area_id = area.id,
+                                    area_nombre = area.nombre
+                                )
+                            }
+                        }
+                    } else {
+                        emptyList()
+                    }
+                }
+
+                Log.d(TAG, "✅ Competencias cargadas: ${todasCompetencias.size}")
                 adapter.updateCompetencias(todasCompetencias)
+
+                // Mejorar el mensaje de estado
+                if (todasCompetencias.isEmpty()) {
+                    val message = when {
+                        userRole != "ADMIN" && userAreaId == 0 ->
+                            "No tienes un área asignada. Contacta al administrador."
+                        userRole != "ADMIN" && userAreaId > 0 ->
+                            "No se encontraron competencias para tu área ($userAreaName)"
+                        else ->
+                            "No hay competencias disponibles en el sistema"
+                    }
+                    Toast.makeText(this@CompetenciesActivity, message, Toast.LENGTH_LONG).show()
+                }
+
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading all competencias", e)
+                Log.e(TAG, "❌ Error loading all competencias", e)
                 Toast.makeText(
                     this@CompetenciesActivity,
                     "Error al cargar competencias: ${e.message}",
@@ -154,17 +234,20 @@ class CompetenciesActivity : AppCompatActivity() {
                 val competencias = if (areaId == null) {
                     todasCompetencias
                 } else {
-                    val competenciasDeArea = RetrofitClient.curriculumApiService.getCompetenciasByArea(areaId)
-                    val areaSeleccionada = areas.find { it.id == areaId }
-                    val areaNombre = areaSeleccionada?.nombre ?: "Área desconocida"
+                    // Solo para ADMIN - filtrar por área específica
+                    withContext(Dispatchers.IO) {
+                        val area: Area = RetrofitClient.curriculumApiService.getArea(areaId)
+                        val competenciasDetalladas: List<CompetenciaDetallada> =
+                            RetrofitClient.curriculumApiService.getCompetenciasByArea(areaId)
 
-                    competenciasDeArea.map { competencia ->
-                        CompetenciaTemplate(
-                            id = competencia.id,
-                            nombre = competencia.nombre,
-                            area_id = areaId,
-                            area_nombre = areaNombre
-                        )
+                        competenciasDetalladas.map { comp ->
+                            CompetenciaTemplate(
+                                id = comp.id,
+                                nombre = comp.nombre,
+                                area_id = area.id,
+                                area_nombre = area.nombre
+                            )
+                        }
                     }
                 }
 
@@ -262,23 +345,50 @@ class CompetenciesActivity : AppCompatActivity() {
     }
 
     private fun setupAreaSpinner() {
-        val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
-        val spinnerAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            areasWithAll.map { it.nombre }
-        )
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerAreas.adapter = spinnerAdapter
+        // Configurar spinner según el rol del usuario
+        if (userRole == "ADMIN") {
+            // ADMIN puede seleccionar entre todas las áreas
+            val areasWithAll = listOf(Area(0, "Todas las áreas")) + areas
+            val spinnerAdapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_item,
+                areasWithAll.map { it.nombre }
+            )
+            spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinnerAreas.adapter = spinnerAdapter
 
-        spinnerAreas.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selectedArea = areasWithAll[position]
-                Log.d(TAG, "Área seleccionada: ${selectedArea.nombre}")
-                loadCompetenciasByArea(if (selectedArea.id == 0) null else selectedArea.id)
+            spinnerAreas.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val selectedArea = areasWithAll[position]
+                    Log.d(TAG, "Área seleccionada: ${selectedArea.nombre}")
+                    loadCompetenciasByArea(if (selectedArea.id == 0) null else selectedArea.id)
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+        } else {
+            // DOCENTE solo ve su área
+            val userAreaList = if (userAreaName.isNotEmpty()) {
+                listOf(Area(userAreaId, userAreaName))
+            } else {
+                listOf(Area(0, "Sin área asignada"))
             }
 
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+            val spinnerAdapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_item,
+                userAreaList.map { it.nombre }
+            )
+            spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            spinnerAreas.adapter = spinnerAdapter
+
+            // Deshabilitar el spinner para docentes
+            spinnerAreas.isEnabled = false
+
+            // Mostrar mensaje informativo
+            if (userAreaName.isEmpty()) {
+                Toast.makeText(this, "No tienes un área asignada", Toast.LENGTH_LONG).show()
+            }
         }
     }
 }

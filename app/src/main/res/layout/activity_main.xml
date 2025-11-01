@@ -10,17 +10,34 @@
     tools:context=".MainActivity">
 
     <!-- Toolbar/Header -->
+
+    <!-- Botón de menú de usuario - CON ELEVACIÓN MAYOR -->
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="?attr/actionBarSize"
         android:background="@color/primaryColor"
         android:elevation="4dp"
-        app:title="Dashboard Docente"
-        app:titleTextColor="@android:color/white"
-        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintTop_toTopOf="parent"
+        app:title="Dashboard Docente"
+        app:titleTextColor="@android:color/white" />
+
+    <ImageButton
+        android:id="@+id/ibUserMenu"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:src="@drawable/ic_user"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Menú de usuario"
+        android:layout_marginEnd="16dp"
+        android:elevation="8dp"
+        app:layout_constraintTop_toTopOf="@id/toolbar"
+        app:layout_constraintBottom_toBottomOf="@id/toolbar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:tint="@android:color/white" />
 
     <!-- RecyclerView para los bimestres -->
     <androidx.recyclerview.widget.RecyclerView

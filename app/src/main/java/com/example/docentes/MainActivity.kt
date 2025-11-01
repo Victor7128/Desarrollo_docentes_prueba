@@ -3,6 +3,7 @@ package com.example.docentes
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.widget.ImageButton
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -10,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.docentes.adapters.BimesterAdapter
+import com.example.docentes.dialogs.UserProfileMenuDialog
 import com.example.docentes.models.BimesterData
 import com.example.docentes.models.Grade
 import com.example.docentes.models.Section
@@ -47,13 +49,31 @@ class MainActivity : AppCompatActivity() {
         // Cargar datos del usuario
         loadUserData()
 
+        initViews()
+        setupUserMenu()
+        loadBimesters()
+    }
+
+    private fun initViews() {
         rvBimesters = findViewById(R.id.recyclerViewBimesters)
         progressBar = findViewById(R.id.progressBar)
         tvEmptyState = findViewById(R.id.tvEmptyState)
-
         rvBimesters.layoutManager = LinearLayoutManager(this)
+    }
 
-        loadBimesters()
+    private fun setupUserMenu() {
+        try {
+            val ibUserMenu = findViewById<ImageButton>(R.id.ibUserMenu)
+            ibUserMenu.setOnClickListener {
+                Log.d(TAG, "🔄 Abriendo menú de usuario...")
+                val userMenuDialog = UserProfileMenuDialog(this)
+                userMenuDialog.show()
+            }
+            Log.d(TAG, "✅ Menú de usuario configurado correctamente")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error configurando menú de usuario", e)
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun isUserLoggedIn(): Boolean {
@@ -72,12 +92,12 @@ class MainActivity : AppCompatActivity() {
         val sharedPreferences = getSharedPreferences("user_prefs", MODE_PRIVATE)
         val userName = sharedPreferences.getString("user_full_name", "")
         val userEmail = sharedPreferences.getString("user_email", "")
+        val userRole = sharedPreferences.getString("user_role", "")
 
-        Log.d("MainActivity", "👤 Usuario cargado: $userName ($userEmail)")
-
-        // Actualizar UI con datos del usuario si es necesario
+        Log.d("MainActivity", "👤 Usuario cargado: $userName ($userEmail) - Rol: $userRole")
     }
 
+    // El resto de tus métodos (loadBimesters, addGrade, deleteGrade, etc.) permanecen igual
     private fun loadBimesters(keepExpanded: Boolean = false) {
         Log.d(TAG, "loadBimesters() - keepExpanded: $keepExpanded, expandedBimesterId: $expandedBimesterId, expandedGradeId: $expandedGradeId")
 
